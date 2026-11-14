@@ -12,13 +12,9 @@ from typing import Any
 from refract.logging_setup import get_logger
 
 from refract.config_inspection import (
-    REMOVED_KEYS,
-    REMOVED_RETRY_CODES,
     ConfigSource,
     ConfigurationLoadError,
     read_config_source,
-    removed_key_message,
-    removed_retry_code_message,
     sha256_bytes,
     utc_now,
 )
@@ -92,11 +88,6 @@ class NotificationsConfig:
 
 
 @dataclass(slots=True, frozen=True)
-class TelemetryConfig:
-    enabled: bool | None = None
-
-
-@dataclass(slots=True, frozen=True)
 class DaemonConfig:
     home: Path
     host: str = "127.0.0.1"
@@ -112,12 +103,10 @@ class DaemonConfig:
     config_loaded_at: str = ""
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
-    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     breaker_failure_threshold: int = 3
     breaker_base_cooldown_s: int = 60
     breaker_max_cooldown_s: int = 900
     ask_timeout_s: int = DEFAULT_ASK_TIMEOUT_S
-    ignored_keys: tuple[str, ...] = ()
 
     @property
     def database_path(self) -> Path:
@@ -185,8 +174,6 @@ def _selection_timeout(raw_timeout: Any) -> int:
 def _dict_selection(
     raw: dict[str, Any], *, profile_id: str, workflow: str
 ) -> tuple[tuple[str, ...], int]:
-    if "max_attempts" in raw:
-        raise ValueError(removed_key_message("profiles workflow max_attempts"))
     allowed = {"targets", "timeout_s"}
     unknown_options = set(raw) - allowed
     if unknown_options:
@@ -399,7 +386,9 @@ def _validate_env_value(val: Any, context: str) -> None:
     if "\x00" in val:
         raise ValueError(f"Environment values cannot contain NUL bytes in {context}")
     if "${" in val:
-        raise ValueError(removed_key_message("${NAME} in targets[].env"))
+        raise ValueError(
+            f"Environment values cannot contain '${{' in {context}; write the literal value"
+        )
 
 
 def _validate_env_mapping(mapping: Any, *, context: str) -> dict[str, str]:
@@ -411,11 +400,6 @@ def _validate_env_mapping(mapping: Any, *, context: str) -> dict[str, str]:
         _validate_env_value(val, context)
         result[key] = val
     return result
-
-
-def _reject_removed(key: str) -> None:
-    if key in REMOVED_KEYS:
-        raise ValueError(removed_key_message(key))
 
 
 def _retry(raw: Any, target_id: str) -> RetryPolicy:
@@ -433,9 +417,6 @@ def _retry(raw: Any, target_id: str) -> RetryPolicy:
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             raise error
         rules.append(tuple(value))
-    for code in rules[0]:
-        if code in REMOVED_RETRY_CODES:
-            raise ValueError(f"Target {target_id!r} {removed_retry_code_message(code)}")
     return RetryPolicy(attempts, *rules)
 
 
@@ -490,8 +471,6 @@ def _target_config(item: Any) -> TargetConfig:
     if not isinstance(item, dict):
         raise ValueError("Each target must be a TOML table")
     target_id, backend = _target_identity(item)
-    for key in item:
-        _reject_removed(f"targets[].{key}")
     unknown = set(item) - _TARGET_KEYS
     if unknown:
         raise ValueError(f"Unsupported target settings: {sorted(unknown)}")
@@ -566,9 +545,6 @@ def _logging_config(raw: Any, home: Path) -> LoggingConfig:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("[logging] must be a TOML table")
-    for key in ("format", "console", "capture_warnings"):
-        if key in raw:
-            _reject_removed(f"[logging].{key}")
     unknown = set(raw) - {"level", "file", "max_bytes", "backup_count"}
     if unknown:
         raise ValueError(f"Unsupported logging settings: {sorted(unknown)}")
@@ -596,17 +572,6 @@ def _notifications_config(raw: Any) -> NotificationsConfig:
     if "enabled" in raw and not isinstance(raw["enabled"], bool):
         raise ValueError("notifications.enabled must be true or false")
     return NotificationsConfig(enabled=raw.get("enabled", False))
-
-
-def _telemetry_config(raw: Any) -> TelemetryConfig:
-    if raw is None:
-        return TelemetryConfig()
-    if not isinstance(raw, dict) or set(raw) - {"enabled", "endpoint"}:
-        raise ValueError("Invalid telemetry configuration")
-    enabled = raw.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ValueError("telemetry.enabled must be true or false")
-    return TelemetryConfig(enabled)
 
 
 def load_config(path: Path | None = None) -> DaemonConfig:
@@ -676,24 +641,18 @@ def _load_config_source(
 def _load_config_values(
     config_path: Path, home: Path, raw: dict[str, Any], source: Any
 ) -> DaemonConfig:
-    for key in raw:
-        _reject_removed(f"[{key}]")
     unsupported = set(raw) - {
         "daemon",
         "logging",
         "targets",
         "profiles",
         "notifications",
-        "telemetry",
-        "pricing",
     }
     if unsupported:
         raise ValueError(f"Unsupported config sections: {sorted(unsupported)}")
     daemon = raw.get("daemon", {})
     if not isinstance(daemon, dict):
         raise ValueError("[daemon] must be a TOML table")
-    for key in daemon:
-        _reject_removed(f"[daemon].{key}")
     unsupported_daemon = set(daemon) - {
         "host",
         "port",
@@ -745,18 +704,10 @@ def _load_config_values(
         profile_declarations=profile_declarations,
         logging=_logging_config(raw.get("logging"), home),
         notifications=_notifications_config(raw.get("notifications")),
-        telemetry=_telemetry_config(raw.get("telemetry")),
         breaker_failure_threshold=_positive_int(daemon.get("breaker_failure_threshold"), 3, "[daemon].breaker_failure_threshold"),
         breaker_base_cooldown_s=breaker_base,
         breaker_max_cooldown_s=breaker_max,
         ask_timeout_s=_positive_int(daemon.get("ask_timeout_s"), DEFAULT_ASK_TIMEOUT_S, "[daemon].ask_timeout_s"),
-        ignored_keys=(
-            *(("telemetry.endpoint",)
-              if isinstance(raw.get("telemetry"), dict) and "endpoint" in raw["telemetry"]
-              else ()),
-            # Pricing is fetched from the published file; a leftover section has no effect.
-            *(("pricing",) if "pricing" in raw else ()),
-        ),
     )
 
 
@@ -789,8 +740,6 @@ def _project_target_override(
     if target_id in seen_target_ids:
         raise ValueError(f"Duplicate project target override: {target_id!r}")
     seen_target_ids.add(target_id)
-    for key in item:
-        _reject_removed(f"targets[].{key}")
     unsupported_fields = set(item) - {"id", "env"}
     if unsupported_fields:
         raise ValueError(
@@ -840,8 +789,6 @@ def _load_project_config_values(
         except FileNotFoundError:
             return base
     raw = tomllib.loads(data.decode("utf-8"))
-    for key in raw:
-        _reject_removed(f"[{key}]")
     unsupported = set(raw) - {"profiles", "targets"}
     if unsupported:
         raise ValueError(f"Unsupported project config sections: {sorted(unsupported)}")

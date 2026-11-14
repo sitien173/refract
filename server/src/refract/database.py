@@ -17,7 +17,6 @@ from typing import Any, Sequence
 from refract.config_inspection import utc_now
 from refract.logging_setup import get_logger
 from refract.models import TERMINAL_STATES, JobResult, JobView, ProjectView
-from refract.product_telemetry import MAX_OUTBOX_AGE_DAYS, MAX_OUTBOX_ROWS
 
 log = get_logger("database")
 _BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
@@ -912,44 +911,6 @@ class Database:
             "SELECT * FROM job_metrics WHERE job_id=?", (job_id,),
         ).fetchone()
         return dict(row) if row is not None else None
-
-    def enqueue_telemetry(self, event_key: str, payload: str, now: str) -> None:
-        with self._connection:
-            self._connection.execute(
-                "INSERT OR IGNORE INTO telemetry_outbox(event_key, created_at, payload, next_attempt_at) VALUES (?, ?, ?, ?)",
-                (event_key, now, payload, now),
-            )
-            self._connection.execute(
-                "DELETE FROM telemetry_outbox WHERE id IN (SELECT id FROM telemetry_outbox ORDER BY id DESC LIMIT -1 OFFSET ?)",
-                (MAX_OUTBOX_ROWS,),
-            )
-            cutoff = (datetime.fromisoformat(now) - timedelta(days=MAX_OUTBOX_AGE_DAYS)).isoformat()
-            self._connection.execute("DELETE FROM telemetry_outbox WHERE created_at < ?", (cutoff,))
-
-    def telemetry_batch(self, limit: int) -> list[dict[str, Any]]:
-        return [dict(row) for row in self._connection.execute(
-            "SELECT * FROM telemetry_outbox WHERE next_attempt_at <= ? ORDER BY id LIMIT ?",
-            (utc_now(), limit),
-        ).fetchall()]
-
-    def telemetry_queue_count(self) -> int:
-        return int(self._connection.execute("SELECT COUNT(*) FROM telemetry_outbox").fetchone()[0])
-
-    def delete_telemetry(self, row_ids: list[int]) -> None:
-        with self._connection:
-            self._connection.executemany("DELETE FROM telemetry_outbox WHERE id=?", [(item,) for item in row_ids])
-
-    def defer_telemetry(self, row_ids: list[int], delays: list[int]) -> None:
-        with self._connection:
-            for row_id, delay in zip(row_ids, delays):
-                self._connection.execute(
-                    "UPDATE telemetry_outbox SET send_attempts=send_attempts+1, next_attempt_at=? WHERE id=?",
-                    ((datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(), row_id),
-                )
-
-    def clear_telemetry_outbox(self) -> None:
-        with self._connection:
-            self._connection.execute("DELETE FROM telemetry_outbox")
 
     def prune_job_metrics(self, cutoff: str) -> None:
         with self._connection:

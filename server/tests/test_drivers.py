@@ -80,11 +80,6 @@ def test_normalize_success_ignores_warnings() -> None:
     assert (result.outcome, result.error_code, result.error) == ("SUCCESS", "", "")
 
 
-@pytest.mark.parametrize("removed", ["no_agent_messages", "fatal_backend", "bad_cd", "request_fatal"])
-def test_removed_codes_are_not_produced_by_the_mapping(removed) -> None:
-    assert removed not in {code for _, code, _ in _OUTCOME_CASES}
-
-
 def test_normalize_failure_without_diagnostic_still_fails() -> None:
     result = _normalize(Result(outcome=Outcome.AGENT_FATAL))
 

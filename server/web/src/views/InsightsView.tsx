@@ -477,45 +477,6 @@ function Tokens({ tokens }: { tokens: StatsResponse["tokens"] }) {
   );
 }
 
-function Cost({ cost, currency }: { cost: StatsResponse["estimated_cost"]; currency: string }) {
-  const models = Object.entries(cost.by_model);
-  return (
-    <section aria-label="Estimated cost" className="flex flex-col gap-3">
-      <h2 className="text-xl font-semibold tracking-tight">Estimated cost</h2>
-      <KpiGrid label="Estimated cost total">
-        <Kpi label="Total" value={`${fixed(cost.total, 2)} ${currency}`} />
-      </KpiGrid>
-      {models.length > 0 && (
-        <div className="overflow-x-auto rounded-lg bg-card shadow-card">
-          <table aria-label="Estimated cost by model" className="w-full text-left text-sm">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th scope="col" className="p-3 font-medium">
-                  Model
-                </th>
-                <th scope="col" className="p-3 font-medium">
-                  Cost
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map(([model, amount]) => (
-                <tr key={model} className="border-t border-border">
-                  <td className="p-3">{model}</td>
-                  <td className="p-3">{`${fixed(amount, 4)} ${currency}`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {cost.unpriced_models.length > 0 && (
-        <p className="callout callout-warning">{`Unpriced models: ${cost.unpriced_models.join(", ")}. Their usage is left out of the estimate.`}</p>
-      )}
-    </section>
-  );
-}
-
 export function InsightsView({ stats, days, loading, error, onDaysChange, onNavigate }: InsightsViewProps) {
   return (
     <main className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
@@ -551,7 +512,6 @@ export function InsightsView({ stats, days, loading, error, onDaysChange, onNavi
           <WorkDelegated work={stats.work_delegated} windowDays={stats.days} />
           <FailoverSaves saves={stats.failover_saves} />
           <Tokens tokens={stats.tokens} />
-          <Cost cost={stats.estimated_cost} currency={stats.currency} />
         </>
       )}
     </main>

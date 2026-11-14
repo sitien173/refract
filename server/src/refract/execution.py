@@ -105,9 +105,6 @@ class TargetExecutor:
         self.drivers = drivers
         self.ask_registry = ask_registry
         self.environment_resolver = environment_resolver
-        # Values each running job was launched with, held in memory only so the terminal
-        # callback can redact them from telemetry after the configuration has rotated.
-        self.run_secrets: dict[str, tuple[str, ...]] = {}
         self._target_semaphores: dict[str, asyncio.Semaphore] = {}
         self._target_active: dict[str, int] = {}
         self._target_users: dict[str, int] = {}
@@ -124,8 +121,6 @@ class TargetExecutor:
         }
     async def execute(self, *, job_id: str, project: ProjectView, workflow: str, session: str, plan: ExecutionPlan, prompt: str, cwd: Path, cancel_event: CancelEvent, fresh: bool = False) -> TargetExecutionResult:
         attempt_tokens: list[TokenCounters] = []
-        run_secrets = tuple(value for target in plan.targets for value in (*target.args, *target.env.values()))
-        self.run_secrets[job_id] = run_secrets
 
         last = DriverResult("REQUEST_FATAL", "", "", "No admissible target", "circuit_open")
         if not plan.selection.targets:
@@ -149,7 +144,6 @@ class TargetExecutor:
             if isinstance(resolved, TargetExecutionResult):
                 return resolved
             bound_env, opaque_revision = resolved
-            self.run_secrets[job_id] = (*run_secrets, *bound_env.values())
             session_target_key = f"{target_key}:env:{opaque_revision}"
             scoped_session = f"{session}:env:{opaque_revision}"
         session_key = (project.id, scoped_session, workflow, session_target_key)
@@ -965,8 +959,6 @@ class JobRunner:
         except Exception as exc:
             await self._finish_failed_job(job_id, exc, final_state, committed_state, outcome)
         finally:
-            # Release the launch values however the run exits; the terminal callback has already taken them on the normal path.
-            self.targets.run_secrets.pop(job_id, None)
             self._commits.pop(job_id, None)
             completed = await run_sync(self.database.job, job_id)
             log.info("Job finished", extra={"event": "job.finished", "job_id": job_id, "project_id": project_id, "state": completed.state if completed else "unknown", "duration_ms": round((time.monotonic() - started_at) * 1000, 2)})

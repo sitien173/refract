@@ -14,23 +14,6 @@ from refract import cli as _cli  # noqa: F401  # bind the real urlopen before co
 from tests.claude_cli import stub_claude
 
 
-def test_v1_server_facades_and_resource_uri_model_are_removed() -> None:
-    import importlib.util
-
-    import refract.models as models
-    import refract.server as server
-
-    assert not hasattr(server, "run")
-    assert not hasattr(server, "project_register")
-    assert not hasattr(server, "status")
-    assert not hasattr(server, "subscription_bus")
-    assert not hasattr(server, "publish_job_resource")
-    assert not hasattr(models, "job_resource_uri")
-    assert not hasattr(models, "JOB_RESOURCE_URI_TEMPLATE")
-    assert "resource_uri" not in models.SubmissionResult.model_fields
-    assert importlib.util.find_spec("refract.backend_runner") is None
-
-
 def test_refract_version_is_1_and_lock_matches_without_dependency_changes() -> None:
     import tomllib
 
@@ -406,11 +389,11 @@ def test_stats_calls_api_and_prints_requested_output(monkeypatch, tmp_path, caps
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
-    payload = {"days": 7, "currency": "USD", "work_delegated": {"by_state": {"succeeded": 1},
+    payload = {"days": 7, "work_delegated": {"by_state": {"succeeded": 1},
         "worker_hours": 1.0, "success_rate": 1.0}, "failover_saves": {"skipped_targets": 1, "retries": 0, "retries_after_failure": 0,
             "unknown_skipped_targets": 0, "unknown_attempts": 0},
-        "tokens": {"by_model": {"model": {}}}, "estimated_cost": {"total": 1.5}}
-    raw_body = b'{ "days": 7, "currency": "USD" }\n'
+        "tokens": {"by_model": {"model": {}}}}
+    raw_body = b'{ "days": 7 }\n'
     class Response:
         def __enter__(self): return self
         def __exit__(self, *_): return False
@@ -434,7 +417,8 @@ def test_stats_calls_api_and_prints_requested_output(monkeypatch, tmp_path, caps
     if json_output:
         assert captured.out.encode() == raw_body
     else:
-        assert "Estimated cost" in captured.out
+        assert "Tokens by model: 1 models" in captured.out
+        assert "Estimated cost" not in captured.out
 
 
 def test_stats_http_error_reports_status_and_api_error(monkeypatch, tmp_path, capsys) -> None:
@@ -498,7 +482,7 @@ def test_stats_malformed_response_exits_nonzero_without_traceback(monkeypatch, t
     [
         b"{}", b"[]", b"null", b'{"work_delegated":{"by_state":1}}',
         b'{"work_delegated":{"by_state":{},"worker_hours":"x","success_rate":0},'
-        b'"failover_saves":{},"tokens":{"by_model":{}},"estimated_cost":{"total":0},"currency":"USD"}',
+        b'"failover_saves":{},"tokens":{"by_model":{}}}',
     ],
     ids=["missing-keys", "list-payload", "null-payload", "wrong-field-type", "non-numeric-field"],
 )
@@ -911,146 +895,3 @@ def test_ask_does_not_require_daemon_config(monkeypatch, tmp_path, capsys) -> No
     finally:
         server.server_close()
         t.join(timeout=2)
-
-
-def _telemetry_cli_home(monkeypatch, tmp_path) -> None:
-    home = tmp_path / "refract"
-    home.mkdir()
-    (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("REFRACT_HOME", str(home))
-
-
-def _telemetry_cli_response(payload: dict):
-    class Response:
-        def __enter__(self): return self
-        def __exit__(self, *_): return False
-        def read(self): return json.dumps(payload).encode()
-
-    return Response()
-
-
-def test_telemetry_prints_documented_fields_and_next_batch(monkeypatch, tmp_path, capsys) -> None:
-    from refract import cli
-
-    _telemetry_cli_home(monkeypatch, tmp_path)
-    batch = {"schema": 1, "install_id": "id-1", "refract_version": "1.0.0", "sent_at": None,
-             "events": [{"event": "job", "job_id": "one"}]}
-    payload = {"enabled": True, "source": "config", "endpoint": "https://example.invalid/v1/events",
-               "install_id": "id-1", "queued": 3, "last_send_at": "2026-11-10T00:00:00+00:00",
-               "last_error": "HTTP 500", "next_batch": batch}
-    seen: dict[str, object] = {}
-
-    def fake_urlopen(url, timeout=None):
-        seen["url"] = url
-        return _telemetry_cli_response(payload)
-
-    monkeypatch.setattr(cli, "urlopen", fake_urlopen)
-    with pytest.raises(SystemExit) as raised:
-        cli.main(["telemetry"])
-    out = capsys.readouterr().out
-    assert raised.value.code == 0
-    assert urlsplit(seen["url"]).path == "/dashboard/api/telemetry"
-    head, _, tail = out.partition("next_batch:\n")
-    assert head.splitlines() == [
-        "enabled: on", "source: config", "endpoint: https://example.invalid/v1/events",
-        "install_id: id-1", "queued: 3", "last_send_at: 2026-11-10T00:00:00+00:00",
-        "last_error: HTTP 500",
-    ]
-    assert json.loads(tail) == batch
-
-
-def test_telemetry_prints_off_state_without_batch(monkeypatch, tmp_path, capsys) -> None:
-    from refract import cli
-
-    _telemetry_cli_home(monkeypatch, tmp_path)
-    payload = {"enabled": False, "source": "default", "endpoint": "https://example.invalid/v1/events",
-               "install_id": None, "queued": 0, "last_send_at": None, "last_error": None,
-               "next_batch": None}
-    monkeypatch.setattr(cli, "urlopen", lambda *a, **k: _telemetry_cli_response(payload))
-    with pytest.raises(SystemExit) as raised:
-        cli.main(["telemetry"])
-    out = capsys.readouterr().out
-    assert raised.value.code == 0
-    assert out.splitlines()[0] == "enabled: off"
-    assert "install_id: none" in out and "last_send_at: never" in out and "last_error: none" in out
-    assert out.rstrip().endswith("next_batch: none")
-
-
-def test_telemetry_without_daemon_exits_nonzero(monkeypatch, tmp_path, capsys) -> None:
-    from urllib.error import URLError
-
-    from refract import cli
-
-    _telemetry_cli_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(cli, "urlopen", lambda *a, **k: (_ for _ in ()).throw(URLError("offline")))
-    with pytest.raises(SystemExit) as raised:
-        cli.main(["telemetry"])
-    assert raised.value.code == 1
-    assert "daemon" in capsys.readouterr().err.lower()
-
-
-def test_telemetry_http_error_exits_nonzero(monkeypatch, tmp_path, capsys) -> None:
-    from io import BytesIO
-    from urllib.error import HTTPError
-
-    from refract import cli
-
-    _telemetry_cli_home(monkeypatch, tmp_path)
-    body = b'{"error":"runtime not active"}'
-    monkeypatch.setattr(
-        cli, "urlopen",
-        lambda url, timeout=None: (_ for _ in ()).throw(HTTPError(url, 503, "Unavailable", {}, BytesIO(body))),
-    )
-    with pytest.raises(SystemExit) as raised:
-        cli.main(["telemetry"])
-    captured = capsys.readouterr()
-    assert raised.value.code == 1
-    assert "HTTP 503" in captured.err and "runtime not active" in captured.err
-
-
-@pytest.mark.asyncio
-async def test_telemetry_cli_next_batch_equals_sender_post_body_apart_from_sent_at(
-    monkeypatch, tmp_path, capsys,
-) -> None:
-    from datetime import timezone
-    from starlette.applications import Starlette
-
-    from refract import cli
-    from refract.config import DaemonConfig, TelemetryConfig
-    from refract.dashboard import DashboardState, register_dashboard_routes
-    from refract.product_telemetry import send_outbox_once
-    from refract.runtime import Runtime
-    from tests.test_dashboard_api import api_request
-
-    _telemetry_cli_home(monkeypatch, tmp_path)
-    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
-    home = tmp_path / "daemon-home"
-    runtime = Runtime(DaemonConfig(home=home, telemetry=TelemetryConfig(True)))
-    try:
-        runtime.database.enqueue_telemetry("job:one", json.dumps({"event": "job", "job_id": "one"}),
-                                           datetime.now(timezone.utc).isoformat())
-        app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
-        _code, route_body, _headers = await api_request(app, "/dashboard/api/telemetry", method="GET")
-        monkeypatch.setattr(cli, "urlopen", lambda *a, **k: _telemetry_cli_response(route_body))
-        with pytest.raises(SystemExit) as raised:
-            cli.main(["telemetry"])
-        assert raised.value.code == 0
-        printed = json.loads(capsys.readouterr().out.partition("next_batch:\n")[2])
-        posted: list[dict] = []
-
-        class Response:
-            status = 200
-
-        def opener(request, timeout=None):
-            posted.append(json.loads(request.data))
-            return Response()
-
-        await send_outbox_once(runtime.database, runtime._telemetry_config_check, home, opener)
-        assert [{k: v for k, v in body.items() if k != "sent_at"} for body in posted] == [
-            {k: v for k, v in printed.items() if k != "sent_at"},
-        ]
-    finally:
-        runtime.database.close()

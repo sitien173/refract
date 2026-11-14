@@ -70,59 +70,58 @@ _POLICY = "retry" "Policy"
 _ENV_SETS = "envs" "_vars"
 _WINDOW = "context" "Window"
 
-# (removed key, replacement hint, layer, global text or project overlay text)
+# (removed key, expected sanitized error, layer, global text or project overlay text)
 _REMOVED = [
-    (f"[{_LF}]", "", "global", _global(sections=f"[{_LF}]\nenabled = true\n")),
-    (f"[daemon].{_HIST}", "", "global", _global().replace(
+    (f"[{_LF}]", "Unsupported config sections", "global", _global(sections=f"[{_LF}]\nenabled = true\n")),
+    (f"[daemon].{_HIST}", "Unsupported daemon settings", "global", _global().replace(
         'default_profile = "balanced"', f'default_profile = "balanced"\n{_HIST} = 8')),
-    (f"[daemon].{_HIST_BYTES}", "", "global", _global().replace(
+    (f"[daemon].{_HIST_BYTES}", "Unsupported daemon settings", "global", _global().replace(
         'default_profile = "balanced"', f'default_profile = "balanced"\n{_HIST_BYTES} = 8')),
-    (f"[{_POLICIES}]", "use targets[].retry", "global",
+    (f"[{_POLICIES}]", "Unsupported config sections", "global",
      _global(sections=f"[{_POLICIES}.fast]\nretry_attempt = 1\n")),
-    ("[envs]", "use targets[].env", "global", _global(sections="[envs.shared]\nA = \"1\"\n")),
-    (f"targets[].{_POLICY}", "use targets[].retry", "global",
+    ("[envs]", "Unsupported config sections", "global", _global(sections="[envs.shared]\nA = \"1\"\n")),
+    ("[telemetry]", "Unsupported config sections", "global", _global(sections="[telemetry]\nenabled = true\n")),
+    (f"targets[].{_POLICY}", "Unsupported target settings", "global",
      _global(target_extra=f'{_POLICY} = "fast"')),
-    (f"targets[].{_ENV_SETS}", "use targets[].env", "global",
+    (f"targets[].{_ENV_SETS}", "Unsupported target settings", "global",
      _global(target_extra=f'{_ENV_SETS} = ["shared"]')),
-    ("targets[].envs", "use targets[].env", "global", _global(target_extra='envs = { A = "1" }')),
-    (f"targets[].{_WINDOW}", "use targets[].context_window", "global",
+    ("targets[].envs", "Unsupported target settings", "global", _global(target_extra='envs = { A = "1" }')),
+    (f"targets[].{_WINDOW}", "Unsupported target settings", "global",
      _global(target_extra=f"{_WINDOW} = 1000")),
-    ("targets[].profile", "use targets[].backend_profile", "global",
+    ("targets[].profile", "Unsupported target settings", "global",
      _global(target_extra='profile = "work"')),
-    ("profiles workflow max_attempts", "use targets[].retry.attempts", "global",
+    ("profiles workflow max_attempts", "Profile workflow has unsupported settings", "global",
      _global().replace('implement = "primary"',
                        'implement = { targets = ["primary"], max_attempts = 2 }')),
-    ("${NAME} in targets[].env", "write the literal value", "global",
+    ("${NAME} in targets[].env", "Environment values cannot contain '${'; write the literal value", "global",
      _global(target_extra='env = { A = "${HOME}" }')),
-    ("[logging].format", "", "global", _global(sections='[logging]\nformat = "json"\n')),
-    ("[logging].console", "", "global", _global(sections="[logging]\nconsole = true\n")),
-    ("[logging].capture_warnings", "", "global",
+    ("[logging].format", "Invalid configuration", "global", _global(sections='[logging]\nformat = "json"\n')),
+    ("[logging].console", "Invalid configuration", "global", _global(sections="[logging]\nconsole = true\n")),
+    ("[logging].capture_warnings", "Invalid configuration", "global",
      _global(sections="[logging]\ncapture_warnings = true\n")),
-    ("[project]", "pass profile on submit", "project", '[project]\ndefault_profile = "balanced"\n'),
-    ("[envs]", "use targets[].env", "project", '[envs.shared]\nA = "1"\n'),
-    (f"targets[].{_ENV_SETS}", "use targets[].env", "project",
+    ("[project]", "Unsupported project config sections", "project", '[project]\ndefault_profile = "balanced"\n'),
+    ("[envs]", "Unsupported project config sections", "project", '[envs.shared]\nA = "1"\n'),
+    (f"targets[].{_ENV_SETS}", "Unsupported project target settings", "project",
      f'[[targets]]\nid = "primary"\n{_ENV_SETS} = ["shared"]\n'),
-    ("targets[].envs", "use targets[].env", "project",
+    ("targets[].envs", "Unsupported project target settings", "project",
      '[[targets]]\nid = "primary"\nenvs = { A = "1" }\n'),
-    ("${NAME} in targets[].env", "write the literal value", "project",
+    ("${NAME} in targets[].env", "Environment values cannot contain '${'; write the literal value", "project",
      '[[targets]]\nid = "primary"\nenv = { A = "${HOME}" }\n'),
 ]
 
 
 @pytest.mark.parametrize(
-    ("key", "hint", "layer", "text"),
+    ("key", "expected", "layer", "text"),
     _REMOVED,
     ids=[f"{layer}:{key}" for key, _, layer, _ in _REMOVED],
 )
-def test_removed_key_fails_load_with_replacement_hint(tmp_path, key, hint, layer, text) -> None:
-    expected = f"{key} has been removed" + (f"; {hint}" if hint else "")
+def test_removed_key_fails_load_with_generic_error(tmp_path, key, expected, layer, text) -> None:
     base = _load_global(tmp_path, _global()) if layer != "global" else None
     with pytest.raises(ValueError) as caught:
         if layer == "global":
             _load_global(tmp_path, text)
         else:
             _load_project(tmp_path, base, text)
-    # The sanitizer must let the exact message through, not a generic error.
     assert re.search(re.escape(expected) + r"$", str(caught.value)), str(caught.value)
 
 
@@ -236,30 +235,12 @@ def test_project_overlay_rejects_global_telemetry(tmp_path) -> None:
         _load_project(tmp_path, base, "[telemetry]\nenabled = true\n")
 
 
-def test_telemetry_endpoint_is_ignored_and_recorded(tmp_path) -> None:
-    config = _load_global(tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n')
-    assert config.ignored_keys == ("telemetry.endpoint",)
-
-
-def test_missing_telemetry_endpoint_has_no_ignored_keys(tmp_path) -> None:
-    config = _load_global(tmp_path, _global())
-    assert config.ignored_keys == ()
-
-
-def test_leftover_pricing_section_loads_and_is_reported_as_ignored(tmp_path) -> None:
-    config = _load_global(
-        tmp_path,
-        _global() + '\n[pricing]\ncurrency = "EUR"\n[pricing.models.m]\ninput = "bad"\n',
-    )
-    assert config.ignored_keys == ("pricing",)
-    assert not hasattr(config, "pricing")
-
-
-def test_leftover_pricing_and_telemetry_endpoint_are_both_ignored(tmp_path) -> None:
-    config = _load_global(
-        tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n[pricing]\ncurrency = "USD"\n',
-    )
-    assert config.ignored_keys == ("telemetry.endpoint", "pricing")
+def test_global_config_rejects_pricing_section(tmp_path) -> None:
+    with pytest.raises(ValueError, match=r"Unsupported config sections"):
+        _load_global(
+            tmp_path,
+            _global() + '\n[pricing]\ncurrency = "EUR"\n[pricing.models.m]\ninput = "bad"\n',
+        )
 
 
 def test_project_overlay_rejects_global_pricing(tmp_path) -> None:
@@ -287,9 +268,9 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     }
     assert set(raw["logging"]) == {"level", "file", "max_bytes", "backup_count"}
     assert set(raw["notifications"]) == {"enabled"}
-    assert set(raw["telemetry"]) == {"enabled"}
-    assert config.telemetry.enabled is False
-    assert config.ignored_keys == ()
+    assert "telemetry" not in raw
+    assert not hasattr(config, "telemetry")
+    assert not hasattr(config, "ignored_keys")
     assert "pricing" not in raw
     assert not hasattr(config, "pricing")
     profiles = raw["profiles"].values()
@@ -341,11 +322,11 @@ _TARGETS_CASES = {
     ),
     "removed_key": (
         [{"id": "t", "backend": "codex", "profile": "x"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
+        Raised(ValueError, "Unsupported target settings: ['profile']"),
     ),
     "removed_key_envs": (
         [{"id": "t", "backend": "codex", "envs": {}}],
-        Raised(ValueError, "targets[].envs has been removed; use targets[].env"),
+        Raised(ValueError, "Unsupported target settings: ['envs']"),
     ),
     "unknown_key": (
         [{"id": "t", "backend": "codex", "zzz": 1, "yyy": 2}],
@@ -353,7 +334,7 @@ _TARGETS_CASES = {
     ),
     "removed_before_unknown": (
         [{"id": "t", "backend": "codex", "zzz": 1, "profile": "x"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
+        Raised(ValueError, "Unsupported target settings: ['profile', 'zzz']"),
     ),
     "args_not_list": (
         [{"id": "t", "backend": "codex", "args": "--x"}],
@@ -369,11 +350,11 @@ _TARGETS_CASES = {
     ),
     "isolated_removed": (
         [{"id": "t", "backend": "pi", "isolated": True}],
-        Raised(ValueError, "targets[].isolated has been removed; use targets[].args"),
+        Raised(ValueError, "Unsupported target settings: ['isolated']"),
     ),
     "read_only_removed": (
         [{"id": "t", "backend": "pi", "read_only": True}],
-        Raised(ValueError, "targets[].read_only has been removed; use targets[].args"),
+        Raised(ValueError, "Unsupported target settings: ['read_only']"),
     ),
     "model_int": (
         [{"id": "t", "backend": "codex", "model": 1}],
@@ -493,7 +474,7 @@ _TARGETS_CASES = {
     ),
     "removed_before_args": (
         [{"id": "t", "backend": "codex", "profile": "x", "args": "y"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
+        Raised(ValueError, "Unsupported target settings: ['profile']"),
     ),
     "unknown_before_args": (
         [{"id": "t", "backend": "codex", "zzz": 1, "args": "y"}],
@@ -525,16 +506,16 @@ _LOGGING_CASES = {
     "empty": ({}, ("INFO", "refract.log", 10485760, 5)),
     "not_dict": ([], Raised(ValueError, "[logging] must be a TOML table")),
     "str": ("x", Raised(ValueError, "[logging] must be a TOML table")),
-    "removed_format": ({"format": "json"}, Raised(ValueError, "[logging].format has been removed")),
-    "removed_console": ({"console": True}, Raised(ValueError, "[logging].console has been removed")),
+    "removed_format": ({"format": "json"}, Raised(ValueError, "Unsupported logging settings: ['format']")),
+    "removed_console": ({"console": True}, Raised(ValueError, "Unsupported logging settings: ['console']")),
     "removed_capture": (
         {"capture_warnings": 1},
-        Raised(ValueError, "[logging].capture_warnings has been removed"),
+        Raised(ValueError, "Unsupported logging settings: ['capture_warnings']"),
     ),
     "unknown": ({"zzz": 1, "yyy": 2}, Raised(ValueError, "Unsupported logging settings: ['yyy', 'zzz']")),
     "removed_before_unknown": (
         {"zzz": 1, "format": 1},
-        Raised(ValueError, "[logging].format has been removed"),
+        Raised(ValueError, "Unsupported logging settings: ['format', 'zzz']"),
     ),
     "level_lower": ({"level": " debug "}, ("DEBUG", "refract.log", 10485760, 5)),
     "level_invalid": ({"level": "loud"}, Raised(ValueError, "Invalid logging level: 'LOUD'")),
@@ -696,16 +677,16 @@ _PROJECT_CASES = {
     ),
     "removed_section": (
         b"[project]\nx = 1\n",
-        Raised(ValueError, "[project] has been removed; pass profile on submit"),
+        Raised(ValueError, "Unsupported project config sections: ['project']"),
     ),
-    "removed_langfuse": (b"[langfuse]\nx = 1\n", Raised(ValueError, "[langfuse] has been removed")),
+    "removed_langfuse": (b"[langfuse]\nx = 1\n", Raised(ValueError, "Unsupported project config sections: ['langfuse']")),
     "unsupported_section": (
         b"[daemon]\nport = 1\n",
         Raised(ValueError, "Unsupported project config sections: ['daemon']"),
     ),
     "removed_section_before_unsupported": (
         b"[daemon]\nport = 1\n\n[project]\nx = 1\n",
-        Raised(ValueError, "[project] has been removed; pass profile on submit"),
+        Raised(ValueError, "Unsupported project config sections: ['daemon', 'project']"),
     ),
     "targets_not_list": (b"targets = 1\n", Raised(ValueError, "[targets] must be a TOML array of tables")),
     "targets_table": (
@@ -726,7 +707,7 @@ _PROJECT_CASES = {
     ),
     "removed_key": (
         b'[[targets]]\nid = "primary"\nprofile = "x"\n',
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
+        Raised(ValueError, "Unsupported project target settings: ['profile']"),
     ),
     "unsupported_field": (
         b'[[targets]]\nid = "primary"\nmodel = "x"\nbackend = "pi"\n',
@@ -734,7 +715,7 @@ _PROJECT_CASES = {
     ),
     "removed_before_unsupported": (
         b'[[targets]]\nid = "primary"\nmodel = "x"\nprofile = "x"\n',
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
+        Raised(ValueError, "Unsupported project target settings: ['model', 'profile']"),
     ),
     "env_merge": (
         b'[[targets]]\nid = "primary"\nenv = { OVER = "proj", NEW = "2" }\n',
@@ -770,7 +751,7 @@ _PROJECT_CASES = {
     ),
     "env_template": (
         b'[[targets]]\nid = "primary"\nenv = { A = "${HOME}" }\n',
-        Raised(ValueError, "${NAME} in targets[].env has been removed; write the literal value"),
+        Raised(ValueError, "Environment values cannot contain '${' in Target 'primary' env; write the literal value"),
     ),
     "empty_targets": (
         b"targets = []\n",
@@ -1001,3 +982,19 @@ def test_load_project_config_values_without_file_returns_base(tmp_path) -> None:
     path.write_text(_PROJECT_BASE, encoding="utf-8")
     base = load_config(path)
     assert _load_project_config_values(tmp_path / "noproject", base, None) is base
+
+
+def test_load_config_rejects_env_expansion_with_direct_message(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[daemon]\ndefault_profile = "default"\n\n'
+        '[[targets]]\nid = "primary"\nbackend = "codex"\n'
+        'env = { TOKEN = "${HOME}" }\n\n'
+        '[profiles.default.plan]\ntargets = ["primary"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception) as exc_info:
+        load_config(path)
+    message = str(exc_info.value)
+    assert "${" in message
+    assert "has been removed" not in message

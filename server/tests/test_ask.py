@@ -128,15 +128,15 @@ async def test_ask_timeout_preserves_unlimited_workflow_and_configured_cap() -> 
 
 
 @pytest.mark.asyncio
-async def test_ask_cancel_releases_with_no_answer_text() -> None:
+async def test_ask_revoke_token_releases_with_no_answer_text() -> None:
     registry = AskRegistry()
     token = registry.issue_token("job-1")
 
-    async def _cancel_soon():
+    async def _revoke_soon():
         await asyncio.sleep(0.02)
-        registry.cancel("job-1")
+        registry.revoke_token("job-1")
 
-    asyncio.create_task(_cancel_soon())
+    asyncio.create_task(_revoke_soon())
     answer = await registry.ask(token, "Waiting for answer...", timeout_s=1.0)
     assert answer == NO_ANSWER_TEXT
     assert not registry.has_pending("job-1")

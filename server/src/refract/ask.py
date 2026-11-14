@@ -229,18 +229,6 @@ class AskRegistry:
             _resolve_future(pending.future, answer, pending.future.get_loop())
         return True
 
-    def cancel(self, job_id: str) -> bool:
-        """Release any pending question for job_id with the no-answer message."""
-        with self._lock:
-            pending = self._pending.pop(job_id, None)
-
-        if pending is None:
-            return False
-
-        loop = pending.future.get_loop()
-        _resolve_future(pending.future, NO_ANSWER_TEXT, loop)
-        return True
-
     async def wait_question(
         self, job_id: str, timeout_s: float | None = None
     ) -> PendingQuestion | None:

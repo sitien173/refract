@@ -110,7 +110,7 @@ def test_target_env_must_be_toml_table(tmp_path) -> None:
 def test_env_values_are_literal_and_reject_references(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_target_toml('env = { HOME_COPY = "${HOME}" }'), encoding="utf-8")
-    with pytest.raises(ValueError, match="has been removed"):
+    with pytest.raises(ValueError, match=r"Environment values cannot contain '\$\{'"):
         load_config(path)
     path.write_text(_target_toml('env = { PRICE = "$5 and $$ stay" }'), encoding="utf-8")
     assert load_config(path).targets[0].env == {"PRICE": "$5 and $$ stay"}

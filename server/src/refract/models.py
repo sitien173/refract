@@ -41,33 +41,8 @@ class ConfigHealth(BaseModel):
     last_known_good_revision: str = ""
 
     @property
-    def path(self) -> str:
-        return self.source_path
-
-    @property
-    def last_attempted_at(self) -> str:
-        return self.attempted_at
-
-    @property
-    def last_successful_at(self) -> str:
-        return self.successful_at
-
-    @property
-    def current_revision(self) -> str:
-        return self.revision
-
-    @property
     def last_error(self) -> str:
         return self.latest_error
-
-    @property
-    def mtime(self) -> str:
-        return self.modification_time
-
-
-# The longer names are useful to callers that do not use the dashboard shorthand.
-ConfigurationHealth = ConfigHealth
-ConfigHealthSnapshot = ConfigHealth
 
 
 class JobView(BaseModel):
@@ -167,8 +142,6 @@ __all__ = [
     "DashboardError",
     "DashboardJob",
     "DashboardOverview",
-    "ConfigHealthSnapshot",
-    "ConfigurationHealth",
     "DaemonStatusResult",
     "FAILURE_KINDS",
     "JobResult",

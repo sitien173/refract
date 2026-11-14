@@ -613,7 +613,7 @@ def test_removed_history_settings_fail_load(tmp_path, setting) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=rf"\[daemon\]\.{setting} has been removed"):
+    with pytest.raises(ValueError, match="Unsupported daemon settings"):
         load_config(path)
 
 
@@ -808,49 +808,6 @@ def test_target_rejects_retry_policy_alias(tmp_path) -> None:
         load_config(path)
 
 
-@pytest.mark.parametrize(
-    ("code", "replacement"),
-    [
-        ("no_agent_messages", "no_output"),
-        ("fatal_backend", "auth, invalid_model, or service_error"),
-        ("bad_cd", "bad_cwd"),
-        ("request_fatal", "no_output"),
-    ],
-    ids=["no_agent_messages", "fatal_backend", "bad_cd", "request_fatal"],
-)
-def test_retry_codes_reject_removed_code_and_name_its_replacement(tmp_path, code, replacement) -> None:
-    path = tmp_path / "config.toml"
-    path.write_text(
-        _explicit_config().replace(
-            'backend = "codex"',
-            f'backend = "codex"\nretry = {{ attempts = 1, codes = ["rate_limit", "{code}"] }}',
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError) as caught:
-        load_config(path)
-    assert str(caught.value) == f"Target retry.codes contains removed code '{code}'; use {replacement}"
-
-
-def test_removed_retry_code_error_survives_a_target_id_that_matches_other_checks(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    text = _explicit_config().replace(
-        'backend = "codex"',
-        'backend = "codex"\nretry = { attempts = 1, codes = ["no_agent_messages"] }',
-    )
-    path.write_text(text.replace('"primary"', '"positive integer"'), encoding="utf-8")
-    with pytest.raises(ValueError) as caught:
-        load_config(path)
-    assert str(caught.value) == "Target retry.codes contains removed code 'no_agent_messages'; use no_output"
-
-
-def test_retry_codes_message_passes_through_only_for_removed_codes() -> None:
-    from refract.config_inspection import sanitize_config_error
-
-    unknown = ValueError("Target 'primary' retry.codes contains removed code 'SECRET_CODE'; use no_output")
-    assert sanitize_config_error(unknown) == "Invalid configuration"
-
-
 def test_environment_declarations_preserve_source_revision_metadata(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -863,11 +820,11 @@ def test_environment_declarations_preserve_source_revision_metadata(tmp_path) ->
     assert catalog.targets[0].env == {"LOCAL": "loc"}
 
 
-def test_removed_tracing_config_section_names_removal(tmp_path) -> None:
+def test_removed_tracing_config_section_fails_as_unsupported_section(tmp_path) -> None:
     path = tmp_path / "config.toml"
     removed_section = "[lang" "fuse]\nenabled = true\n"
     path.write_text(_explicit_config() + "\n" + removed_section, encoding="utf-8")
-    with pytest.raises(ValueError, match=r"(?=.*lang" "fuse)(?=.*removed)"):
+    with pytest.raises(ValueError, match="Unsupported config sections"):
         load_config(path)
 
 
@@ -920,7 +877,7 @@ _TARGET_SELECTION_CASES = {
     ),
     "dict_max_attempts": (
         {"max_attempts": 1, "targets": ["a"]},
-        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
+        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['max_attempts']"),
     ),
     "dict_unknown_settings": (
         {"targets": ["a"], "y": 1, "x": 2},
@@ -928,7 +885,7 @@ _TARGET_SELECTION_CASES = {
     ),
     "dict_max_attempts_and_unknown": (
         {"max_attempts": 1, "x": 1, "targets": ["a"]},
-        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
+        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['max_attempts', 'x']"),
     ),
     "dict_nonstring_targets": (
         {"targets": ["a", 2]},
@@ -1377,7 +1334,7 @@ _ENV_MAPPING_CASES = {
     "nul_value": ({"A": "a\x00"}, Raised(ValueError, "Environment values cannot contain NUL bytes in ctx")),
     "template_value": (
         {"A": "${HOME}"},
-        Raised(ValueError, "${NAME} in targets[].env has been removed; write the literal value"),
+        Raised(ValueError, "Environment values cannot contain '${' in ctx; write the literal value"),
     ),
     "dollar_ok": ({"A": "$HOME {x}"}, {"A": "$HOME {x}"}),
     "empty_value_ok": ({"A": ""}, {"A": ""}),

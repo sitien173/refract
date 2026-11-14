@@ -30,11 +30,9 @@ const detailOf = (id: string, state = "failed", pending_question: unknown = null
 });
 const emptyStats = {
   days: 7,
-  currency: "USD",
   work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
   failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
   tokens: { by_backend: {}, by_model: {}, by_target: {} },
-  estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
 };
 const announcements = () => screen.getByRole("status", { name: "Announcements" });
 

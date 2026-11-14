@@ -70,15 +70,6 @@ The [Backends]({% link backends.md %}) page lists the flags each backend accepts
 
 A request fatal failure is not retried and does not count toward the circuit breaker. A target fatal failure is not retried and opens the target circuit at once.
 
-Config loading rejects a removed code in `retry.codes` and names the replacement. Update the config before you start the daemon.
-
-| Removed code | Replacement |
-| --- | --- |
-| `no_agent_messages` | `no_output` |
-| `fatal_backend` | `auth`, `invalid_model`, or `service_error` |
-| `bad_cd` | `bad_cwd` |
-| `request_fatal` | `no_output` |
-
 `retry.patterns` match the error text. The library changed some error messages, so re-check any pattern that matched the old text, for example `backend command exited with status` or `The <backend> CLI was not found on PATH`.
 
 ## `[profiles.*]`

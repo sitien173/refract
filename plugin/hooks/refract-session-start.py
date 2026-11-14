@@ -60,7 +60,6 @@ def ensure_daemon():
 
 # Same patterns as server/src/refract/updater.py; the hook cannot import refract.
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
-SHA_RE = re.compile(r"[0-9a-f]{7,40}\Z")
 CACHE_MAX_BYTES = 64 * 1024
 CACHE_MAX_AGE = 86400
 CACHE_MAX_FUTURE = 300
@@ -104,11 +103,9 @@ def update_label(cache):
     schema = cache.get("schema")
     if isinstance(schema, bool) or schema != 1 or cache.get("update_available") is not True:
         return None
-    version, commit = cache.get("latest_version"), cache.get("latest_commit")
+    version = cache.get("latest_version")
     if isinstance(version, str) and VERSION_RE.match(version):
         return f"Refract {version}"
-    if isinstance(commit, str) and SHA_RE.match(commit):
-        return f"Refract commit {commit[:7]}"
     return "A Refract update"
 
 

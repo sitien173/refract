@@ -300,9 +300,11 @@ test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
 v2_tools='project_''resolve|task_''guide|job_''submit|job_''wait|job_''list|job_''cancel|job_''retry|job_''answer|job_''report_error|project_''register|openmcp://'
-if grep -R -E "$v2_tools" \
-    skills/brainstorming skills/systematic-debugging \
-    skills/test-driven-development skills/verifying-before-completion; then
+policy_skills=(skills/brainstorming skills/verifying-before-completion)
+for dir in "${policy_skills[@]}"; do
+    test -d "$dir"
+done
+if grep -R -E "$v2_tools" "${policy_skills[@]}"; then
     printf 'Refract mechanics leaked into a policy skill\n' >&2
     exit 1
 fi

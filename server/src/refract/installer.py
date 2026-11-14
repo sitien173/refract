@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -18,14 +19,21 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Sequence
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
-from refract import updater
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+
 from refract.config import refract_home
+from refract.processes import kill_process_tree, prepare_command, process_group_kwargs
 
 DEFAULT_SOURCE = "https://github.com/sitien173/refract"
 MARKETPLACE_REPO = "sitien173/refract"
@@ -43,9 +51,40 @@ _SCOPES_BY_HOST = {
 # Written into the copied tree so a removal can tell a Refract copy from the `agy` CLI's own
 # install at the same path. The dotted, Refract-specific name is not an Antigravity file.
 _AGY_IDE_MARKER = ".refract-agy-ide-install.json"
-_SOURCE_KEYS = ("repo", *updater._MARKETPLACE_KEYS)
+_MARKETPLACE_KEYS = ("path", "url", "source")
+_SOURCE_KEYS = ("repo", *_MARKETPLACE_KEYS)
 # Verbs for `<host> plugin <verb>` on the hosts that use a marketplace.
 _VERBS = {"claude": ("install", "uninstall"), "codex": ("add", "remove")}
+
+SUBPROCESS_TIMEOUT_S = 15.0
+APPLY_TIMEOUT_S = 300.0
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}\Z")
+_GITHUB_RE = re.compile(
+    r"^(?:(?:git\+)?https://(?:www\.)?|git:|ssh://git@|git@)?github\.com[/:]sitien173/refract"
+    r"(?:\.git)?/?\Z"
+)
+_UNTRUSTED = "untrusted source"
+_NOT_A_GIT_CLONE = "not a git clone"
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+@dataclass(frozen=True)
+class Install:
+    """One discovered install. ``state`` is preset when discovery already decided it."""
+
+    name: str
+    source: str
+    state: str | None
+    detail: str
+    path: Path | None = None
+    uv_tool: bool = False
+    scope: str | None = None
+    installed_sha: str | None = None
+    version: str | None = None
+    ref: str | None = None
+    marketplace: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,25 +246,352 @@ def _scope_error(hosts: Sequence[str], scope: str) -> str | None:
     return f"--scope {scope} is not supported for {', '.join(bad)}" if bad else None
 
 
+# --- subprocess & discovery helpers -------------------------------------------
+
+
+def _run(args: list[str], timeout: float, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+    # npm-style .cmd shims do not start from a bare name; prepare_command swaps in the .ps1 shim.
+    resolved = shutil.which(args[0])
+    if resolved:
+        resolved_args = [resolved, *args[1:]]
+        prepared = prepare_command(resolved_args)
+        if prepared != resolved_args:
+            return _run_tree(prepared, timeout, cwd, env)
+    return subprocess.run(
+        args,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        env=env,
+        check=False,
+    )
+
+
+def _run_tree(
+    args: list[str], timeout: float, cwd: Path | None, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a shim that starts a process tree; on timeout kill the whole tree.
+
+    ``subprocess.run`` kills only the direct child, then waits for every pipe holder to exit.
+    """
+    with subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        **process_group_kwargs(),
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(process.pid)
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+def _git(root: Path, *args: str, timeout: float = SUBPROCESS_TIMEOUT_S) -> subprocess.CompletedProcess[str] | None:
+    """Run git in ``root``; None means git could not run or timed out."""
+    try:
+        return _run(["git", "-C", str(root), *args], timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _host_json(executable: str, *args: str) -> tuple[str, Any]:
+    """Return ("missing" | "failed" | "ok", parsed JSON or short failure detail)."""
+    if shutil.which(executable) is None:
+        return "missing", None
+    try:
+        proc = _run([executable, *args], SUBPROCESS_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return "failed", "timeout"
+    except OSError:
+        return "failed", "cannot run"
+    if proc.returncode != 0:
+        return "failed", f"exit {proc.returncode}"
+    try:
+        return "ok", json.loads(proc.stdout)
+    except ValueError:
+        return "failed", "malformed output"
+
+
+def _parse_source(value: object, base: Path | None) -> tuple[str, Path | None] | None:
+    """Return ("github", None), ("clone", path), or None when the source is untrusted."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text.startswith("-"):
+        return None
+    if _GITHUB_RE.match(text):
+        return "github", None
+    if text.startswith("file://"):
+        text = _file_url_path(text)
+    local = text.startswith(("/", "./", "../", "~")) or Path(text).is_absolute()
+    if not local and base is not None and ":" not in text and (base / text).exists():
+        local = True
+    if not local:
+        return None
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        if base is None:
+            return None
+        path = base / path
+    return "clone", path
+
+
+def _file_url_path(url: str) -> str:
+    return url2pathname(urlsplit(url).path)
+
+
+def _git_root(path: Path) -> Path | None:
+    """Canonical git root of ``path``, or None when it is not inside a git work tree."""
+    probe = path if path.is_dir() else path.parent
+    proc = _git(probe, "rev-parse", "--show-toplevel")
+    if proc is None or proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return Path(proc.stdout.strip()).resolve()
+
+
+def _plugin_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        for key in ("plugins", "installed", "marketplaces"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _item_name(item: dict[str, Any]) -> str:
+    raw = item.get("id") or item.get("name") or ""
+    return str(raw).split("@", 1)[0]
+
+
+def _claude_plugins_file() -> Path:
+    override = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    base = Path(override).expanduser() if override else Path.home() / ".claude"
+    return base / "plugins" / "installed_plugins.json"
+
+
+def _installed_records() -> dict[str, list[dict[str, Any]]]:
+    try:
+        data = json.loads(_claude_plugins_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    plugins = data.get("plugins", data) if isinstance(data, dict) else {}
+    if not isinstance(plugins, dict):
+        return {}
+    return {
+        str(key): [r for r in value if isinstance(r, dict)]
+        for key, value in plugins.items()
+        if isinstance(value, list)
+    }
+
+
+def _record_sha(records: dict[str, list[dict[str, Any]]], plugin_id: str, scope: str | None) -> str | None:
+    for record in records.get(plugin_id, []):
+        candidate = record.get("gitCommitSha")
+        if (scope is None or record.get("scope") == scope) and isinstance(candidate, str):
+            return candidate if _SHA_RE.match(candidate) else None
+    return None
+
+
+def _item_marketplace(item: dict[str, Any]) -> str:
+    plugin_id = str(item.get("id") or item.get("name"))
+    return str(item.get("marketplace") or (plugin_id.split("@", 1) + [""])[1])
+
+
+def _marketplace_source(entry: dict[str, Any]) -> tuple[str, Path | None] | None:
+    repo = entry.get("repo")
+    if isinstance(repo, str) and repo.strip() and not repo.strip().startswith("-"):
+        return _parse_source(f"github.com/{repo.strip()}", None)
+    for key in _MARKETPLACE_KEYS:
+        if key in entry:
+            parsed = _parse_source(entry[key], None)
+            if parsed is not None or key != "source":
+                return parsed
+    return None
+
+
+def _claude_clone_install(parsed_path: Path | None, common: dict[str, Any]) -> Install:
+    root = _git_root(parsed_path) if parsed_path is not None else None
+    if root is None:
+        return Install("claude", "clone", "skipped", _NOT_A_GIT_CLONE, **common)
+    return Install("claude", "clone", None, "clone marketplace", path=root, **common)
+
+
+def _claude_install(
+    item: dict[str, Any], market_sources: dict[str, tuple[str, Path | None] | None], records: Any
+) -> Install:
+    plugin_id = str(item.get("id") or item.get("name"))
+    market = _item_marketplace(item)
+    scope = item.get("scope") if isinstance(item.get("scope"), str) else None
+    version = item.get("version") if _VERSION_RE.match(str(item.get("version"))) else None
+    common = {
+        "scope": scope,
+        "installed_sha": _record_sha(records, plugin_id, scope),
+        "version": version,
+        "ref": plugin_id,
+        "marketplace": market if _NAME_RE.match(market) else None,
+    }
+    parsed = market_sources.get(market)
+    if parsed is None:
+        return Install("claude", "unknown", "skipped", _UNTRUSTED, **common)
+    if parsed[0] == "github":
+        return Install("claude", "github", None, "github marketplace", **common)
+    return _claude_clone_install(parsed[1], common)
+
+
+def discover_claude() -> list[Install]:
+    status, plugins = _host_json("claude", "plugin", "list", "--json")
+    if status == "missing":
+        return []
+    if status == "failed":
+        return [Install("claude", "unknown", "failed", f"cannot list plugins: {plugins}")]
+    mine = [item for item in _plugin_items(plugins) if _item_name(item) == "refract"]
+    if not mine:
+        return []
+    status, markets = _host_json("claude", "plugin", "marketplace", "list", "--json")
+    if status != "ok":
+        return [Install("claude", "unknown", "failed", "cannot list marketplaces")]
+    market_sources = {str(m.get("name")): _marketplace_source(m) for m in _plugin_items(markets)}
+    records = _installed_records()
+    return [_claude_install(item, market_sources, records) for item in mine]
+
+
+def _is_refract_package(path: Path) -> bool:
+    for candidate in (path, path / "plugin"):
+        try:
+            if json.loads((candidate / "package.json").read_text()).get("name") == "refract":
+                return True
+        except (OSError, ValueError, AttributeError):
+            continue
+    return False
+
+
+def _package_version(path: Path) -> str | None:
+    try:
+        version = json.loads((path / "package.json").read_text()).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and _VERSION_RE.match(version) else None
+
+
+def _pi_install(entry: Any, base: Path) -> Install | None:
+    source = entry.get("source") if isinstance(entry, dict) else entry
+    if not isinstance(source, str):
+        return None
+    parsed = _parse_source(source, base)
+    if parsed is None:
+        if source.strip().startswith("-") or "refract" in source.lower():
+            return Install("pi", "unknown", "skipped", _UNTRUSTED, ref=source)
+        return None
+    if parsed[0] == "github":
+        # Pi clones user-scope git packages to <agent dir>/git/<host>/<path>.
+        checkout = base / "git" / "github.com" / "sitien173" / "refract"
+        return Install("pi", "github", None, "github package", ref=source, version=_package_version(checkout / "plugin"))
+    if not _is_refract_package(parsed[1]):
+        return None
+    root = _git_root(parsed[1])
+    if root is None:
+        return Install("pi", "clone", "skipped", _NOT_A_GIT_CLONE, ref=source)
+    return Install("pi", "clone", None, "local package", path=root, ref=source)
+
+
+def _pi_agent_dir() -> Path:
+    override = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".pi" / "agent"
+
+
+def discover_pi_at(base: Path) -> list[Install]:
+    """Pi installs recorded in ``base/settings.json``; the installer reads ``<cwd>/.pi`` for ``-l``."""
+    try:
+        data = json.loads((base / "settings.json").read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        return [Install("pi", "unknown", "failed", "cannot read settings")]
+    packages = data.get("packages") if isinstance(data, dict) else None
+    entries = packages if isinstance(packages, list) else []
+    return [install for install in (_pi_install(entry, base) for entry in entries) if install is not None]
+
+
+def discover_detect_only(host: str) -> list[Install]:
+    """Codex and agy: detect a Refract plugin and classify it as manual."""
+    status, data = _host_json(host, "plugin", "list", "--json")
+    if status == "missing":
+        return []
+    if status == "failed":
+        return [Install(host, "unknown", "failed", f"cannot list plugins: {data}")]
+    mine = [item for item in _plugin_items(data) if _item_name(item) == "refract"]
+    if not mine:
+        return []
+    plugin_id = str(mine[0].get("id") or "")
+    return [Install(host, "unknown", "manual", "manual update required", ref=plugin_id if _ID_RE.match(plugin_id) else None)]
+
+
+@contextmanager
+def _file_lock(path: Path) -> Iterator[bool]:
+    """Hold an exclusive non-blocking lock on ``path``; yield False when another process holds it.
+
+    Raises OSError when the lock file cannot be opened, including when it is a symlink.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # O_NOFOLLOW: a symlinked lock path raises OSError instead of creating or locking the target.
+    # Windows has no O_NOFOLLOW, so refuse a symlink explicitly there.
+    if not hasattr(os, "O_NOFOLLOW") and path.is_symlink():
+        raise OSError(f"{path} is a symlink")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    held = False
+    try:
+        try:
+            if sys.platform == "win32":
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held = True
+        except OSError:
+            pass
+        yield held
+    finally:
+        if held:
+            try:
+                if sys.platform == "win32":
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(fd)
+
+
 # --- probes -------------------------------------------------------------------
 
 
 def _probe(host: str, *args: str) -> list[dict[str, Any]] | None:
-    status, data = updater._host_json(host, *args)
-    return updater._plugin_items(data) if status == "ok" else None
+    status, data = _host_json(host, *args)
+    return _plugin_items(data) if status == "ok" else None
 
 
-def _installed(host: str, scope: str) -> tuple[list[updater.Install], str | None]:
+def _installed(host: str, scope: str) -> tuple[list[Install], str | None]:
     """Existing installs of the plugin in ``scope``, and the reason discovery failed, if it did."""
     if host == "claude":
-        found = updater.discover_claude()
+        found = discover_claude()
     elif host == "pi":
-        base = updater._pi_agent_dir() if scope == "user" else Path.cwd() / ".pi"
-        found = updater.discover_pi_at(base)
+        base = _pi_agent_dir() if scope == "user" else Path.cwd() / ".pi"
+        found = discover_pi_at(base)
     elif host == "codex":
         found = _codex_installs()
     else:
-        found = updater.discover_detect_only(host)
+        found = discover_detect_only(host)
     failed = next((item.detail for item in found if item.state == "failed"), None)
     if failed:
         # A launch failure reads "cannot list plugins: cannot run"; report the host failing to run.
@@ -236,22 +602,22 @@ def _installed(host: str, scope: str) -> tuple[list[updater.Install], str | None
     return mine, None
 
 
-def _codex_installs() -> list[updater.Install]:
+def _codex_installs() -> list[Install]:
     """Codex installs read from the raw plugin list, which discovery trims to its first item."""
-    status, data = updater._host_json("codex", "plugin", "list", "--json")
+    status, data = _host_json("codex", "plugin", "list", "--json")
     if status == "failed":
-        return [updater.Install("codex", "unknown", "failed", f"cannot list plugins: {data}")]
-    items = updater._plugin_items(data) if status == "ok" else []
+        return [Install("codex", "unknown", "failed", f"cannot list plugins: {data}")]
+    items = _plugin_items(data) if status == "ok" else []
     # A bare name or an empty marketplace is accepted; refract@other is another plugin.
     mine = any(
-        updater._item_name(item) == "refract"
-        and updater._item_marketplace(item) in (MARKETPLACE, "")
+        _item_name(item) == "refract"
+        and _item_marketplace(item) in (MARKETPLACE, "")
         for item in items
     )
-    return [updater.Install("codex", "unknown", "manual", "", ref=PLUGIN_ID)] if mine else []
+    return [Install("codex", "unknown", "manual", "", ref=PLUGIN_ID)] if mine else []
 
 
-def _is_refract_plugin(item: updater.Install) -> bool:
+def _is_refract_plugin(item: Install) -> bool:
     """True for ``refract@refract``; ``refract@other`` is a different plugin."""
     return item.ref == PLUGIN_ID if item.ref else item.marketplace == MARKETPLACE
 
@@ -261,7 +627,7 @@ def _source_text(entry: dict[str, Any]) -> str:
 
 
 def _same_source(entry: dict[str, Any], source: str) -> bool:
-    have, want = updater._marketplace_source(entry), updater._parse_source(source, None)
+    have, want = _marketplace_source(entry), _parse_source(source, None)
     if have is None or want is None:
         wanted = (source, marketplace_arg(source))
         return any(entry.get(key) in wanted for key in _SOURCE_KEYS)
@@ -307,20 +673,20 @@ def _plan_market_install(host: str, source: str, scope: str) -> _Plan:
 
 
 def _is_target(item: dict[str, Any], host: str, scope: str) -> bool:
-    market = updater._item_marketplace(item)
-    plugin = updater._item_name(item) == "refract" and market == MARKETPLACE
+    market = _item_marketplace(item)
+    plugin = _item_name(item) == "refract" and market == MARKETPLACE
     return plugin and (host != "claude" or item.get("scope") in (None, scope))
 
 
 def _is_other_plugin(item: dict[str, Any], host: str, scope: str) -> bool:
-    return updater._item_marketplace(item) == MARKETPLACE and not _is_target(item, host, scope)
+    return _item_marketplace(item) == MARKETPLACE and not _is_target(item, host, scope)
 
 
 def _is_refract_source(entry: dict[str, Any]) -> bool:
-    parsed = updater._marketplace_source(entry)
+    parsed = _marketplace_source(entry)
     if parsed is None:
         return False
-    return parsed[0] == "github" or updater._is_refract_package(Path(str(parsed[1])))
+    return parsed[0] == "github" or _is_refract_package(Path(str(parsed[1])))
 
 
 def _marketplace_removal(host: str, scope: str) -> tuple[list[_Step], tuple[str, ...]]:
@@ -401,7 +767,7 @@ def _plan(host: str, action: str, source: str, scope: str) -> _Plan:
 def _apply(argv: list[str]) -> str | None:
     """Run one mutating command; return the failure reason, or None on success."""
     try:
-        proc = updater._run(argv, updater.APPLY_TIMEOUT_S)
+        proc = _run(argv, APPLY_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return f"{argv[0]} timed out"
     except OSError:
@@ -588,7 +954,7 @@ def run(
     lock_path = refract_home() / "update.lock"
     with ExitStack() as stack:
         try:
-            held = stack.enter_context(updater._file_lock(lock_path))
+            held = stack.enter_context(_file_lock(lock_path))
         except OSError:
             out(f"Failed: cannot open {lock_path}. Nothing was changed.")
             return 1

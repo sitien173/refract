@@ -10,50 +10,6 @@ from pathlib import Path
 
 
 MAX_CONFIG_ERROR_LENGTH = 512
-_USE_TARGETS_ENV = "use targets[].env"
-
-# Removed config keys and the replacement each load error names. Split
-# literals keep removed names out of repository-wide greps.
-REMOVED_KEYS: dict[str, str] = {
-    "[" "lang" "fuse" "]": "",
-    "[daemon]." "history" "_turns": "",
-    "[daemon]." "history" "_bytes": "",
-    "[" "retry" "Policies" "]": "use targets[].retry",
-    "targets[]." "retry" "Policy": "use targets[].retry",
-    "[envs]": _USE_TARGETS_ENV,
-    "targets[]." "envs" "_vars": _USE_TARGETS_ENV,
-    "targets[].envs": _USE_TARGETS_ENV,
-    "targets[]." "context" "Window": "use targets[].context_window",
-    "targets[].profile": "use targets[].backend_profile",
-    "targets[].isolated": "use targets[].args",
-    "targets[].read_only": "use targets[].args",
-    "profiles workflow max_attempts": "use targets[].retry.attempts",
-    "${NAME} in targets[].env": "write the literal value",
-    "[project]": "pass profile on submit",
-    "[logging].format": "",
-    "[logging].console": "",
-    "[logging].capture_warnings": "",
-}
-
-
-def removed_key_message(key: str) -> str:
-    hint = REMOVED_KEYS[key]
-    return f"{key} has been removed" + (f"; {hint}" if hint else "")
-
-
-_REMOVED_MESSAGES = frozenset(removed_key_message(key) for key in REMOVED_KEYS)
-
-# Codes that retry.codes matched before backends moved to coding_agent_cli, with their replacements.
-REMOVED_RETRY_CODES = {
-    "no_agent_messages": "no_output",
-    "fatal_backend": "auth, invalid_model, or service_error",
-    "bad_cd": "bad_cwd",
-    "request_fatal": "no_output",
-}
-
-
-def removed_retry_code_message(code: str) -> str:
-    return f"retry.codes contains removed code {code!r}; use {REMOVED_RETRY_CODES[code]}"
 
 
 def utc_now() -> str:
@@ -105,8 +61,6 @@ def _source_config_error(raw_text: str) -> str | None:
 
 def _section_config_error(text: str) -> str | None:
     """Recognize section diagnostics that contain no configuration values."""
-    if text in _REMOVED_MESSAGES:
-        return text
     if text.startswith("Unsupported config sections"):
         return "Unsupported config sections"
     if text.startswith("Unsupported daemon settings"):
@@ -170,9 +124,6 @@ def _target_config_error(text: str) -> str | None:
     """Remove target identifiers and argument values from validation errors."""
     if not text.startswith(("Target ", "Codex target ", "Isolated Pi target ")):
         return None
-    for code in REMOVED_RETRY_CODES:
-        if removed_retry_code_message(code) in text:
-            return f"Target {removed_retry_code_message(code)}"
     if "args must contain only strings" in text:
         return "Target args must contain only strings"
     if "args must be a list of strings" in text:
@@ -204,6 +155,8 @@ def _environment_config_error(text: str) -> str | None:
         return "Environment values must be strings"
     if "Environment values cannot contain NUL bytes" in text:
         return "Environment values cannot contain NUL bytes"
+    if "Environment values cannot contain '${'" in text:
+        return "Environment values cannot contain '${'; write the literal value"
     if "Environment key cannot be empty" in text:
         return "Environment key cannot be empty"
     if "Environment key cannot contain '='" in text:

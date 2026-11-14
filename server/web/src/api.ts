@@ -176,7 +176,6 @@ export type TokenTotals = z.infer<typeof TokenTotalsSchema>;
 
 export const StatsResponseSchema = z.object({
   days: z.number(),
-  currency: z.string(),
   work_delegated: z.object({
     by_workflow: z.record(z.string(), z.record(z.string(), z.number())),
     by_state: z.record(z.string(), z.number()),
@@ -204,11 +203,6 @@ export const StatsResponseSchema = z.object({
     by_backend: z.record(z.string(), TokenTotalsSchema),
     by_model: z.record(z.string(), TokenTotalsSchema),
     by_target: z.record(z.string(), TokenTotalsSchema),
-  }),
-  estimated_cost: z.object({
-    total: z.number(),
-    by_model: z.record(z.string(), z.number()),
-    unpriced_models: z.array(z.string()),
   }),
 });
 export const STATS_DAYS = [1, 7, 30, 365] as const;

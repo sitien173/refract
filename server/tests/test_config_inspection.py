@@ -5,7 +5,7 @@ import hashlib
 import pytest
 
 from refract.config import load_config
-from refract.config_inspection import REMOVED_KEYS, removed_key_message, sanitize_config_error, sha256_bytes
+from refract.config_inspection import sanitize_config_error, sha256_bytes
 
 
 def _config() -> str:
@@ -59,12 +59,6 @@ def test_invalid_utf8_uses_configuration_error_contract(tmp_path) -> None:
 def test_sanitizer_does_not_passthrough_configuration_identifiers(message, expected) -> None:
     assert sanitize_config_error(message) == expected
     assert "SECRET_" not in sanitize_config_error(message)
-
-
-@pytest.mark.parametrize("key", sorted(REMOVED_KEYS))
-def test_sanitizer_preserves_removed_config_message(key) -> None:
-    message = removed_key_message(key)
-    assert sanitize_config_error(message) == message
 
 
 def test_sanitizer_preserves_only_parser_location_evidence() -> None:

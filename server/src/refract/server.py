@@ -20,7 +20,7 @@ from mcp.server import CacheHint, MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
-from mcp.types import CLIENT_INFO_META_KEY, CallToolResult, TextContent, ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -459,33 +459,6 @@ def _progress_token_present(context: Any) -> bool:
         return False
 
 
-def _client_name(request_context: Any) -> str:
-    """The client name from the 2026-07-28 request `_meta`, else from the 2025-era initialize params."""
-    meta = getattr(request_context, "meta", None)
-    info = meta.get(CLIENT_INFO_META_KEY) if isinstance(meta, Mapping) else None
-    name = info.get("name") if isinstance(info, Mapping) else None
-    if isinstance(name, str) and name:
-        return name
-    client_params = request_context.session.client_params
-    return client_params.client_info.name if client_params is not None else ""
-
-
-def _count_mcp_feature(context: Any, operation: str) -> None:
-    """Count the tool and the client name; a single flag check while telemetry is off."""
-    if context is None:
-        return
-    try:
-        runtime = context.request_context.lifespan_context
-        if not runtime.telemetry_enabled:
-            return
-        runtime.count_feature(f"mcp.{operation}")
-        client_name = _client_name(context.request_context)
-        if client_name:
-            runtime.count_feature(f"mcp_client.{client_name[:64]}")
-    except Exception:
-        log.warning("Feature count failed", extra={"event": "telemetry.count_failed"}, exc_info=True)
-
-
 def _logged_request[**P, R](operation: str) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
     def decorate(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         @wraps(function)
@@ -495,7 +468,6 @@ def _logged_request[**P, R](operation: str) -> Callable[[Callable[P, Awaitable[R
                 None,
             )
             request_id = _request_id(context)
-            _count_mcp_feature(context, operation)
             started_at = time.monotonic()
             extra: dict[str, Any] = {"operation": operation}
             if operation == "wait":

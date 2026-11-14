@@ -258,7 +258,6 @@ describe("dashboard API", () => {
 // Copied from a real `get_stats(days=7, tz_offset_minutes=0)` result over four seeded jobs.
 const sampleStats = {
   days: 7,
-  currency: "USD",
   work_delegated: {
     by_workflow: {
       consult: {
@@ -389,14 +388,6 @@ const sampleStats = {
       },
     },
   },
-  estimated_cost: {
-    total: 0.010624999999999999,
-    by_model: {
-      "claude-y": 0.009585,
-      "gpt-x": 0.00104,
-    },
-    unpriced_models: ["unassigned"],
-  },
 };
 
 describe("stats API", () => {
@@ -429,16 +420,14 @@ describe("stats API", () => {
   it("accepts empty maps and rejects a missing or mistyped field", () => {
     const empty = {
       days: 1,
-      currency: "USD",
       work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
       failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
       tokens: { by_backend: {}, by_model: {}, by_target: {} },
-      estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
     };
     expect(StatsResponseSchema.safeParse(empty).success).toBe(true);
-    const { currency: _, ...withoutCurrency } = empty;
-    expect(StatsResponseSchema.safeParse(withoutCurrency).success).toBe(false);
-    expect(StatsResponseSchema.safeParse({ ...empty, estimated_cost: { ...empty.estimated_cost, total: "0" } }).success).toBe(false);
+    const { days: _, ...withoutDays } = empty;
+    expect(StatsResponseSchema.safeParse(withoutDays).success).toBe(false);
+    expect(StatsResponseSchema.safeParse({ ...empty, work_delegated: { ...empty.work_delegated, worker_hours: "0" } }).success).toBe(false);
   });
 
   it("maps an error response to DashboardApiError", async () => {

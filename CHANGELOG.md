@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Breaking: removed cost estimates and the remote pricing fetch. `refract stats --json` and `GET /dashboard/api/stats` no longer include `estimated_cost` or `currency`, `refract stats` omits the Estimated cost line, and the Insights view no longer shows the cost card or unpriced-model notice.
+- Removed `REFRACT_PRICING_FETCH` and the daily pricing fetch; a config that still has `[pricing]` now fails to load as an unsupported section. Token grouping still strips provider prefixes (`provider/model` merges with `model`), though models that only a pricing alias joined may now show as separate rows. A leftover `~/.refract/pricing.toml` file may be deleted by hand.
+- Removed product telemetry: the `refract telemetry` command, the `/dashboard/api/telemetry` endpoint, and the `[telemetry]` config section are gone. A config that still has `[telemetry]` fails to load. Rows left in `telemetry_outbox` and the `telemetry_id` and `telemetry_heartbeat` files in the state directory may be deleted by hand.
+- Removed pre-release config keys now fail as unknown keys or sections without a replacement hint, and an old `retry.codes` value is accepted without a migration error (though it never matches) until a later round validates codes.
+- Breaking: `refract update` no longer applies updates, stops the daemon, or syncs host caches, and now prints the server and per-host update commands.
+- Removed `--force` from `refract update`.
+- The update cache (`update-check.json`) no longer carries `latest_commit` or `components`.
+- Removed the generic `systematic-debugging` and `test-driven-development` skills and the unused `refract-stats` script from the plugin; `verifying-before-completion` remains, and the SessionStart hook no longer reads `latest_commit`.
+- Fixed the Antigravity skill table in `plugin/README.md` to use the `refract:` prefix (`refract:brainstorming`, `refract:writing-plans`, `refract:executing-plans`, `refract:executing-plans-autonomously`).
+
 ## 3.0.5 - 2026-11-13
 
 - `/mcp` now serves MCP protocol 2026-07-28 on `mcp` 2.3, pinned as `mcp>=2.3,<2.4`. Requests for 2026-07-28 are stateless, with no `initialize` call and no session. Clients from 2025 still use `initialize` and `Mcp-Session-Id` sessions on the same URL.

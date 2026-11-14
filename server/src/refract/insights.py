@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from refract.pricing import PricingConfig, canonical_model
-
 INPUT_INCLUDES_CACHE_COMPONENTS = {
     "codex": frozenset({"cache_read"}),
     "claude": frozenset({"cache_read", "cache_write"}),
@@ -19,7 +17,12 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
+def _strip_provider_prefix(raw: str) -> str:
+    """Drop a leading provider prefix (`provider/model` -> `model`)."""
+    return raw.rpartition("/")[2] or raw
+
+
+def get_stats(database: Any, days: int = 7,
               tz_offset_minutes: int = 0, *, now: datetime | None = None) -> dict[str, Any]:
     """Aggregate retained job metrics for one rolling window."""
     if isinstance(days, bool) or days not in VALID_DAYS:
@@ -52,9 +55,6 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
     by_backend: dict[str, dict[str, int]] = {}
     by_model: dict[str, dict[str, int]] = {}
     by_target: dict[str, dict[str, int]] = {}
-    cost_models: dict[str, float] = {}
-    unpriced: set[str] = set()
-    cost_total = 0.0
 
     def token_accumulator(mapping: dict[str, dict[str, int]], key: str) -> dict[str, int]:
         return mapping.setdefault(key, {"input": 0, "uncached_input": 0, "output": 0,
@@ -98,8 +98,7 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
         uncached = max(0, raw_input - included_cache)
         values = {"input": raw_input, "uncached_input": uncached, "output": row["tok_output"] or 0,
                   "cache_read": cache_read, "cache_write": cache_write}
-        canonical = canonical_model(row["model"] or "", pricing.aliases)
-        label = canonical or "unassigned"
+        label = _strip_provider_prefix(row["model"] or "") or "unassigned"
         dimensions = ((by_backend, row["backend"] or "unassigned"),
                       (by_model, label),
                       (by_target, row["target"] or "unassigned"))
@@ -108,14 +107,6 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
             for name, value in values.items():
                 totals[name] += value
             totals["jobs"] += 1
-        price = pricing.models.get(canonical)
-        if price is None:
-            unpriced.add(label)
-            continue
-        amount = (uncached * price.input + values["output"] * price.output
-                  + cache_read * price.cache_read + values["cache_write"] * price.cache_write) / 1_000_000
-        cost_total += amount
-        cost_models[label] = cost_models.get(label, 0.0) + amount
 
     def add_cache_ratio(values: dict[str, dict[str, int]]) -> dict[str, dict[str, int | float]]:
         return {key: {**item, "cache_hit_ratio": item["cache_read"] /
@@ -125,7 +116,6 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
 
     return {
         "days": days,
-        "currency": pricing.currency,
         "work_delegated": {"by_workflow": by_workflow, "by_state": by_state,
             "breakdown": [{"profile": profile, "workflow": workflow, "target": target, "state": state, "jobs": jobs}
                           for (profile, workflow, target, state), jobs in sorted(breakdown.items())],
@@ -138,6 +128,4 @@ def get_stats(database: Any, pricing: PricingConfig, days: int = 7,
                             "unknown_attempts": unknown_attempts},
         "tokens": {"by_backend": add_cache_ratio(by_backend), "by_model": add_cache_ratio(by_model),
                    "by_target": add_cache_ratio(by_target)},
-        "estimated_cost": {"total": cost_total, "by_model": dict(sorted(cost_models.items())),
-                           "unpriced_models": sorted(unpriced)},
     }

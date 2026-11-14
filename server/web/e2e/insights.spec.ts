@@ -20,7 +20,6 @@ test("insights shows seeded job metrics and switches the window", async ({ page 
     await expect(breakdownTable.getByRole("columnheader", { name: heading })).toBeVisible();
   }
   await expect(page.getByRole("table", { name: "Tokens by model" }).getByRole("row", { name: /^e2e / })).toBeVisible();
-  await expect(page.getByText("Unpriced models: e2e.")).toBeVisible();
 
   await page.getByRole("button", { name: "30 days" }).click();
   await expect(page.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
