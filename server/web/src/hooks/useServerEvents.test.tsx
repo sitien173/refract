@@ -110,10 +110,10 @@ describe("useServerEvents", () => {
     expect(FakeSource.instances).toHaveLength(1);
   });
 
-  it("does not resync on the first open", () => {
+  it("refetches on the first open, since queries may have read before the stream opened", () => {
     const { invalidate, source } = setup();
     act(() => source().onopen?.());
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(keys(invalidate)).toEqual(expect.arrayContaining([["job"], ["jobs"], ["cards"], ["card"], ["stats"], ["targets"]]));
   });
 
   it("closes the stream and cancels a pending reconnect on unmount", async () => {

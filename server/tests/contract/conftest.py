@@ -112,6 +112,25 @@ other = {{ targets = ["claude-secondary", "claude-primary"], timeout_s = 30 }}
     return content
 
 
+def _wait_for_release(path: Path, timeout_s: float = 10.0) -> None:
+    """Wait until no process holds path open.
+
+    On Windows the venv python.exe is a launcher that runs the interpreter as a child, and
+    stopping the launcher does not wait for the child to close the database. A rename fails
+    with a sharing violation while SQLite still holds the file.
+    """
+    deadline = time.monotonic() + timeout_s
+    probe = path.with_name(path.name + ".release-probe")
+    while path.exists() and time.monotonic() < deadline:
+        try:
+            os.replace(path, probe)
+        except PermissionError:
+            time.sleep(0.1)
+            continue
+        os.replace(probe, path)
+        return
+
+
 def doctor_command() -> list[str]:
     return [sys.executable, "-c", "import sys; from refract.cli import main; sys.exit(main())", "doctor"]
 
@@ -252,6 +271,8 @@ class ContractDaemon:
                 self.process.kill()
                 self.process.wait(timeout=5)
         self.process = None
+        if os.name == "nt":
+            _wait_for_release(self.db_path)
 
     def restart(self, *, kill: bool = False) -> None:
         self.stop(kill=kill)

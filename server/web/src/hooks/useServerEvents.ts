@@ -33,7 +33,6 @@ export function useServerEvents(create: (url: string) => EventSourceLike | null 
     let source: EventSourceLike | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let delay = RECONNECT_MIN_MS;
-    let dropped = false;
     let stopped = false;
 
     const invalidateAll = () => {
@@ -73,15 +72,11 @@ export function useServerEvents(create: (url: string) => EventSourceLike | null 
       source = next;
       next.onopen = () => {
         delay = RECONNECT_MIN_MS;
-        // Signals sent while the stream was down are lost, so refetch once it is back.
-        if (dropped) {
-          dropped = false;
-          invalidateAll();
-        }
+        // Signals sent before the stream opened, at first load or while it was down, are lost, so refetch now.
+        invalidateAll();
       };
       next.onmessage = (event) => onEvent(event.data);
       next.onerror = () => {
-        dropped = true;
         // A connecting source reconnects on its own. A closed one gave up, so reopen it with backoff.
         if (next.readyState !== CLOSED || stopped) return;
         next.close();
