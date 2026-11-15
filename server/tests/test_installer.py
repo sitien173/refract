@@ -1204,4 +1204,5 @@ def test_run_keeps_existing_ssh_command(monkeypatch: pytest.MonkeyPatch) -> None
 def test_parse_source_percent_decodes_file_url(tmp_path: Path) -> None:
     target = tmp_path / "my dir" / "repo"
     assert installer._parse_source(target.as_uri(), None) == ("clone", target)
-    assert installer._parse_source("file:///tmp/my%20plugin", None) == ("clone", Path("/tmp/my plugin"))
+    if sys.platform != "win32":  # A file URL without a drive is not an absolute path on Windows.
+        assert installer._parse_source("file:///tmp/my%20plugin", None) == ("clone", Path("/tmp/my plugin"))

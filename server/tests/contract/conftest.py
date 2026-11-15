@@ -6,12 +6,10 @@ import asyncio
 import http.client
 import json
 import os
-import functools
 import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager
@@ -118,49 +116,18 @@ def doctor_command() -> list[str]:
     return [sys.executable, "-c", "import sys; from refract.cli import main; sys.exit(main())", "doctor"]
 
 
-@functools.cache
-def loader_accepts_schema_version() -> bool:
-    """Probe the installed loader: True once it accepts a top-level schema_version key.
-
-    Today the loader rejects the key; Phase 3 requires it. The probe keeps the harness
-    config valid on both sides without edits. The probe does not read doctor's success
-    payload: the loader accepts the key unless doctor fails with a config_invalid error.
-    Any other failure also returns False, since doctor did not complete successfully.
-    """
-    with tempfile.TemporaryDirectory(prefix="refract contract probe ") as raw_home:
-        home = Path(raw_home)
-        (home / "config.toml").write_text(
-            _render_config(8765, schema_version=True, extra_toml=""), encoding="utf-8"
-        )
-        env = os.environ.copy()
-        env["REFRACT_HOME"] = str(home)
-        env["DO_NOT_TRACK"] = "1"
-        proc = subprocess.run(
-            doctor_command(), cwd=SERVER_DIR, env=env, capture_output=True, text=True, timeout=30
-        )
-    lines = [line for line in proc.stderr.splitlines() if line.strip()]
-    if lines:
-        try:
-            error = json.loads(lines[-1]).get("error")
-        except (ValueError, AttributeError):
-            error = None
-        if isinstance(error, dict) and error.get("code") == "config_invalid":
-            return False
-    return proc.returncode == 0
-
-
 def write_config(
     home: Path, *, port: int, extra_toml: str = "", with_schema_version: bool = True
 ) -> Path:
     """Write the daemon config.toml in one place.
 
-    schema_version = 1 is written when the loader accepts it; only the missing-version
-    test passes with_schema_version=False.
+    schema_version = 1 is written unless with_schema_version=False; only the
+    missing-version test passes False.
     """
     config_path = home / "config.toml"
     content = _render_config(
         port,
-        schema_version=with_schema_version and loader_accepts_schema_version(),
+        schema_version=with_schema_version,
         extra_toml=extra_toml,
     )
     config_path.write_text(content, encoding="utf-8")

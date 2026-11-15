@@ -242,6 +242,8 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def _copy_exclusive(src: str | None, dst: str, created: list[str]) -> None:
+    if os.path.lexists(dst):  # On Windows, "xb" follows a dangling symlink and creates its target.
+        raise FileExistsError(dst)
     with open(dst, "xb") as out:
         created.append(dst)
         if src is not None:
