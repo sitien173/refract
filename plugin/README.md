@@ -221,9 +221,10 @@ The SessionStart hook reads the cached check result and tells you and the model 
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
 | `/refract:execute-plan [target]` | Run or resume one wave of phases through all three gates. |
 | `/refract:execute-plan-all [target]` | Autonomously execute all waves through final audit and consolidation. |
+| `/refract:debug <symptom>` | Diagnose a bug from runtime evidence before fixing it. |
 
 Antigravity (`agy` and `agy-ide`) does not load plugin slash commands, so
-`/refract:brainstorm` and the other three are unavailable. Invoke the skill by
+`/refract:brainstorm` and the other four are unavailable. Invoke the skill by
 name instead:
 
 | Command | Skill to invoke in Antigravity |
@@ -232,9 +233,10 @@ name instead:
 | `/refract:write-plan` | `refract:writing-plans` |
 | `/refract:execute-plan` | `refract:executing-plans` |
 | `/refract:execute-plan-all` | `refract:executing-plans-autonomously` |
+| `/refract:debug` | `refract:debugging-with-runtime-evidence` |
 
 In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
-`/execute-plan`, `/execute-plan-all`.
+`/execute-plan`, `/execute-plan-all`, `/debug`.
 
 ## Parallel phases
 
@@ -250,6 +252,7 @@ In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
 - `coordinating-multi-model-work`: Refract lifecycle, Git ownership, review, handover.
 - `brainstorming`, `writing-plans`, `executing-plans`, `executing-plans-autonomously`: the three gates and full-plan autonomous execution.
 - `verifying-before-completion`: process discipline.
+- `debugging-with-runtime-evidence`: diagnosis from runtime logs before a fix.
 - `using-git-worktrees`: optional isolated workspace before registration.
 
 ## Layout

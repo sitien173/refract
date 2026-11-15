@@ -115,11 +115,11 @@ wheels = [
 
 [[package]]
 name = "coding-agent-cli"
-version = "0.2.1"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/01/18/1e3b26dd3e09983495d0feaa2289d75401aa2c0e089d7ec713eb801e8b0c/coding_agent_cli-0.2.1.tar.gz", hash = "sha256:983ad97be7f41af0661e7f83b236f2714ef516447b48b7e596cc3549be450897", size = 214247, upload-time = "2026-11-15T08:59:22.017Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/ea/9edb37aeb2278c62b515cf624ee596664543c555cfd7201cb0a2674e95e9/coding_agent_cli-0.2.2.tar.gz", hash = "sha256:e888d66e08d371e487b7d0063ef0eabfa8b6fef2afe048128008e867a5286bed", size = 229422, upload-time = "2026-11-15T12:03:26.474Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/47/09b8b5374fc6645e7a3e0b0d9f10b0942692c8137cf132228bff531bc6ae/coding_agent_cli-0.2.1-py3-none-any.whl", hash = "sha256:0b61325967dd9ac704cb43d963926dbbc5774387e5f197c88c1435cf435ec4f7", size = 44028, upload-time = "2026-11-15T08:59:20.352Z" },
+    { url = "https://files.pythonhosted.org/packages/52/61/74681cb46059ff925425331135abb05b6f9264a073936efce062eb882214/coding_agent_cli-0.2.2-py3-none-any.whl", hash = "sha256:806e0050f61be1693f3b2d61d12fdb4efcc1d7b908086e4025798bd3b980cbb2", size = 44207, upload-time = "2026-11-15T12:03:24.868Z" },
 ]
 
 [[package]]
@@ -712,7 +712,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "coding-agent-cli", specifier = "==0.2.1" },
+    { name = "coding-agent-cli", specifier = "==0.2.2" },
     { name = "mcp", specifier = ">=2.3,<2.4" },
     { name = "notify-py", specifier = ">=0.3.43,<0.4" },
     { name = "pydantic", specifier = ">=2" },

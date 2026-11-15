@@ -14,8 +14,9 @@ nav_order: 3
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
 | `/refract:execute-plan [target]` | Run or resume one wave of phases through all three gates. |
 | `/refract:execute-plan-all [target]` | Autonomously execute all waves through final audit and consolidation. |
+| `/refract:debug <symptom>` | Diagnose a bug from runtime evidence before fixing it. |
 
-In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`, `/execute-plan`, `/execute-plan-all`.
+In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`, `/execute-plan`, `/execute-plan-all`, `/debug`.
 
 ## Job workflows
 
