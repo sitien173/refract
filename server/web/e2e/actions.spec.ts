@@ -18,13 +18,16 @@ test("cancel reports the request and later the final state", async ({ page, requ
 });
 
 test("retry opens the new job", async ({ page, request }) => {
-  await page.goto("/dashboard/jobs/e2e-seed-020");
-  await expect(page.getByRole("heading", { name: "Job e2e-seed-020" })).toBeVisible();
+  // Retry a job of its own so the seeded profile keeps exactly the seeded jobs for the other tests.
+  const sourceId = await submitJob(request, "E2E retry source job");
+  await expect.poll(() => jobState(request, sourceId), { timeout: 20_000 }).toBe("succeeded");
+  await page.goto(`/dashboard/jobs/${encodeURIComponent(sourceId)}`);
+  await expect(page.getByRole("heading", { name: `Job ${sourceId}` })).toBeVisible();
   await page.getByRole("button", { name: "Retry job" }).click();
   await expect(page.getByRole("status", { name: "Announcements" })).toHaveText("Retry started");
-  await expect(page).toHaveURL(/\/dashboard\/jobs\/(?!e2e-seed-020$)[^/?]+/);
+  await expect(page).not.toHaveURL(new RegExp(`/dashboard/jobs/${encodeURIComponent(sourceId)}$`));
   const retriedId = decodeURIComponent(new URL(page.url()).pathname.split("/").pop() ?? "");
-  expect(retriedId).not.toBe("e2e-seed-020");
+  expect(retriedId).not.toBe(sourceId);
   await expect(page.getByRole("heading", { name: `Job ${retriedId}` })).toBeVisible();
   await expect.poll(() => jobState(request, retriedId), { timeout: 20_000 }).toBe("succeeded");
 });
