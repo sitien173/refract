@@ -1,12 +1,9 @@
-# Refract v3 example config. Copy to ~/.refract/config.toml and edit.
-# Every value below is a placeholder. Do not commit real credentials.
-
 schema_version = 1
 
 [daemon]
 host = "127.0.0.1"
 port = 8765
-max_jobs = 4
+max_jobs = 10
 default_profile = "base"
 breaker_failure_threshold = 3
 breaker_base_cooldown_s = 60
@@ -15,52 +12,311 @@ ask_timeout_s = 300
 
 [logging]
 level = "INFO"
-file = "refract.log"
+file = "openmcp.log"
 max_bytes = 10485760
 backup_count = 5
 
 [notifications]
-enabled = false
+enabled = true
+
+# ------------------------------- Claude_Code ------------------------------------------
 
 [[targets]]
-id = "codex-high-code"
-backend = "codex"
-model = "gpt-5.6-sol"
-backend_profile = "work"
-reasoning = "high"
-max_concurrency = 2
-context_window = 400000
-args = ["--color", "never"]
-retry = { attempts = 2, codes = ["service_error"], patterns = ["temporarily unavailable"] }
-env = { OPENAI_BASE_URL = "https://api.example.invalid/v1" }
-
-[[targets]]
-id = "pi-high-review"
-backend = "pi"
-model = "openai-codex/gpt-5.6-luna"
-reasoning = "high"
-args = ["--no-context-files", "--no-extensions", "--no-skills", "--no-prompt-templates", "--tools", "read,grep,find,ls"]
-system_prompt = "Review only. Never modify files."
-retry = { attempts = 1, codes = ["timeout"], patterns = ["overloaded"] }
-
-[[targets]]
-id = "claude-opus-code"
+id = "cc/claude-opus-high"
 backend = "claude"
 model = "opus"
 reasoning = "high"
-args = ["--safe-mode", "--strict-mcp-config"]
-env = { ANTHROPIC_API_KEY = "replace-me" }
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
 [[targets]]
-id = "agy-gemini-consult"
+id = "cc/claude-opus-medium"
+backend = "claude"
+model = "opus"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
+
+[[targets]]
+id = "cc/claude-sonnet-high"
+backend = "claude"
+model = "sonnet"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
+
+[[targets]]
+id = "cc/claude-sonnet-medium"
+backend = "claude"
+model = "sonnet"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
+
+[[targets]]
+id = "cc/claude-haiku-high"
+backend = "claude"
+model = "haiku"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
+
+# ------------------------------- END_Claude_Code ------------------------------------------
+
+# ------------------------------- PI -------------------------------------------------------
+
+[[targets]]
+id = "pi-cliproxy/chatgpt-web/gpt-6-luna-think"
+backend = "pi"
+model = "chatgpt-web/gpt-6-luna-think"
+max_concurrency = 3
+system_prompt = "Replace me with an example system prompt."
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/astra-high"
+backend = "pi"
+model = "openai-codex/gpt-6-astra"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/astra-medium"
+backend = "pi"
+model = "openai-codex/gpt-6-astra"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/luna-high"
+backend = "pi"
+model = "openai-codex/gpt-6-luna"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/sol-high"
+backend = "pi"
+model = "openai-codex/gpt-6.1-sol"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/sol-medium"
+backend = "pi"
+model = "openai-codex/gpt-6.1-sol"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/terra-high"
+backend = "pi"
+model = "openai-codex/gpt-6.1-terra"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-openai-codex/terra-medium"
+backend = "pi"
+model = "openai-codex/gpt-6.1-terra"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+[[targets]]
+id = "pi-deepseek/deepseek-flash-high"
+backend = "pi"
+model = "deepseek/deepseek-v4.1-flash"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+args = ["--no-refract"]
+
+# ------------------------------- END_PI ---------------------------------------------
+
+# ------------------------------- CODEX ----------------------------------------------
+
+[[targets]]
+id = "codex/astra-high"
+backend = "codex"
+model = "gpt-6-astra"
+reasoning = "high"
+max_concurrency = 3
+backend_profile = "example"
+retry = { attempts = 2, codes = ["service_error"], patterns = ["temporarily unavailable"] }
+env = { REFRACT_DISABLE = "1", OPENAI_BASE_URL = "https://api.example.invalid/v1" }
+
+[[targets]]
+id = "codex/astra-medium"
+backend = "codex"
+model = "gpt-6-astra"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "codex/luna-high"
+backend = "codex"
+model = "gpt-6-luna"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "codex/sol-high"
+backend = "codex"
+model = "gpt-6.1-sol"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "codex/sol-medium"
+backend = "codex"
+model = "gpt-6.1-sol"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "codex/terra-high"
+backend = "codex"
+model = "gpt-6.1-terra"
+reasoning = "high"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "codex/terra-medium"
+backend = "codex"
+model = "gpt-6.1-terra"
+reasoning = "medium"
+max_concurrency = 3
+env = { REFRACT_DISABLE = "1" }
+
+# ------------------------------- END_CODEX ------------------------------------------
+
+
+# ------------------------------- ANTIGRAVITY ----------------------------------------
+
+[[targets]]
+id = "agy-opus"
 backend = "agy"
-model = "Gemini 3.1 Pro (High)"
+model = "Claude Opus 5.5"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
 
-[profiles.base]
-implement = "codex-high-code"
-review = ["pi-high-review", "claude-opus-code"]
-consult = { targets = ["agy-gemini-consult", "pi-high-review"], timeout_s = 1800 }
+[[targets]]
+id = "agy-sonnet"
+backend = "agy"
+model = "Claude Sonnet 5.5"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
 
-[profiles.claude_impl]
+[[targets]]
+id = "agy-opus-4-6"
+backend = "agy"
+model = "Claude Opus 4.6 (Thinking)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-sonnet-4-6"
+backend = "agy"
+model = "Claude Sonnet 4.6 (Thinking)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-gemini-pro-high"
+backend = "agy"
+model = "Gemini 4 Argon (High)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-gemini-pro-medium"
+backend = "agy"
+model = "Gemini 4 Argon (Medium)"
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-gemini-flash-high"
+backend = "agy"
+model = "Gemini 3.8 Flash (High)"
+max_concurrency = 3
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-gemini-hydrogen-high"
+backend = "agy"
+model = "Gemini 4 Hydrogen (High)"
+max_concurrency = 10
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+[[targets]]
+id = "agy-gemini-hydrogen-medium"
+backend = "agy"
+model = "Gemini 4 Hydrogen (Medium)"
+max_concurrency = 10
+args = ["--print-timeout", "60m"]
+env = { REFRACT_DISABLE = "1" }
+
+# ------------------------------- END_ANTIGRAVITY ----------------------------------------
+
+[profiles."base"]
+implement = ["cc/claude-sonnet-medium", "cc/claude-haiku-high", "agy-gemini-flash-high"]
+consult = ["cc/claude-opus-high", "agy-gemini-pro-medium", "codex/sol-high", "codex/astra-medium"]
+review = ["codex/sol-medium", "agy-gemini-hydrogen-high", "cc/claude-opus-medium"]
+other = ["agy-gemini-flash-high", "codex/luna-high"]
+
+[profiles."balanced"]
 extends = "base"
-implement = "claude-opus-code"
+consult = ["agy-gemini-pro-medium", "codex/astra-medium", "cc/claude-opus-medium", "agy-opus"]
+implement = ["agy-gemini-hydrogen-high", "codex/luna-high", "cc/claude-sonnet-medium", "agy-gemini-flash-high"]
+review = ["codex/terra-high", "cc/claude-opus-medium"]
+
+[profiles."google"]
+extends = "base"
+consult = ["agy-gemini-pro-medium"]
+implement = ["agy-gemini-hydrogen-medium", "agy-gemini-flash-high", "agy-sonnet"]
+review = "agy-gemini-hydrogen-high"
+
+[profiles."openai"]
+extends = "base"
+consult = ["codex/sol-high", "codex/astra-medium"]
+implement = { targets = ["codex/luna-high"], timeout_s = 1800 }
+review = ["codex/terra-high"]
+
+[profiles."anthropic"]
+extends = "base"
+consult = ["cc/claude-opus-high"]
+implement = ["cc/claude-sonnet-medium", "cc/claude-haiku-high"]
+review = ["cc/claude-opus-medium"]

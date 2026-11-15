@@ -128,8 +128,7 @@ def test_removed_key_fails_load_with_generic_error(tmp_path, key, expected, laye
 def test_target_config_has_exact_v3_fields() -> None:
     assert [field.name for field in dataclasses.fields(TargetConfig)] == [
         "id", "backend", "model", "backend_profile", "reasoning", "system_prompt",
-        "args", "max_concurrency", "context_window",
-        "retry", "env",
+        "args", "max_concurrency", "retry", "env",
     ]
     assert [field.name for field in dataclasses.fields(RetryPolicy)] == [
         "attempts", "codes", "patterns",
@@ -141,13 +140,11 @@ def test_target_config_has_exact_v3_fields() -> None:
     assert not names & {"retry_policies", "envs", "project_profile_declarations"}
 
 
-def test_inline_retry_context_window_and_literal_env_load(tmp_path) -> None:
-    catalog = _load_global(tmp_path, _global(target_extra="""context_window = 200000
-retry = { attempts = 2, codes = ["service_error"], patterns = ["overloaded"] }
+def test_inline_retry_and_literal_env_load(tmp_path) -> None:
+    catalog = _load_global(tmp_path, _global(target_extra="""retry = { attempts = 2, codes = ["service_error"], patterns = ["overloaded"] }
 env = { API_URL = "https://example.invalid", MODE = "$literal" }"""))
 
     target = catalog.targets[0]
-    assert target.context_window == 200000
     assert target.retry == RetryPolicy(attempts=2, codes=("service_error",), patterns=("overloaded",))
     assert target.env == {"API_URL": "https://example.invalid", "MODE": "$literal"}
     assert resolve_target_environment(catalog, target) == target.env
@@ -285,7 +282,8 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     assert any(isinstance(value, str) for value in workflow_values)
     assert any(isinstance(value, list) for value in workflow_values)
     assert any(isinstance(value, dict) and "timeout_s" in value for value in workflow_values)
-    env_values = [value for target in config.targets for value in target.env.values()]
+    # REFRACT_DISABLE is a non-secret switch; every other env value stays a placeholder.
+    env_values = [value for target in config.targets for key, value in target.env.items() if key != "REFRACT_DISABLE"]
     assert env_values
     assert all("example" in value or "replace-me" in value for value in env_values)
 

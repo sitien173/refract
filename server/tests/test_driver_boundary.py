@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,7 @@ BACKENDS = ("claude", "codex", "pi", "agy")
 EMPTY_TOKENS = {"context_used": None, "context_window": None, "input": None, "output": None, "cache_read": None, "cache_write": None}
 STREAM_TOKENS = {"context_used": None, "context_window": None, "input": 3, "output": 4, "cache_read": None, "cache_write": None}
 SUMMED_TOKENS = {**STREAM_TOKENS, "context_used": 7}
+CLAUDE_TOKENS = {**STREAM_TOKENS, "cache_read": 0, "cache_write": 0}
 AGY_SESSION = "12345678-1234-1234-1234-123456789abc"
 TIMEOUT_S = 5
 CANCEL_FALLBACK_S = 30.0
@@ -44,6 +44,7 @@ STREAMS: dict[str, list[str]] = {
         _json(type="stream_event", event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hi"}, "index": 0}),
         _json(type="stream_event", event={"type": "content_block_start", "content_block": {"type": "tool_use", "id": "t1", "name": "Read", "input": {"p": "x"}}}),
         _json(type="stream_event", event={"type": "content_block_stop", "index": 1}),
+        _json(type="assistant", message={"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"p": "x"}}]}),
         _json(type="result", subtype="success", is_error=False, result="Final", session_id="s-1", usage={"input_tokens": 3, "output_tokens": 4}),
     ],
     "codex": [
@@ -53,13 +54,12 @@ STREAMS: dict[str, list[str]] = {
     ],
     "pi": [
         _json(type="session", id="pi-1"),
-        _json(type="message_update", assistantMessageEvent={"type": "text_delta", "delta": "Hi"}),
+        _json(type="message_update", assistantMessageEvent={"type": "text_delta", "delta": "Final"}),
         _json(type="tool_execution_start", toolCallId="p1", toolName="grep", args={}),
         _json(type="tool_execution_end", toolCallId="p1", isError=False, result="r"),
         _json(type="message_end", message={"role": "assistant", "content": [{"type": "text", "text": "Final"}], "usage": {"input": 3, "output": 4}}),
     ],
     "agy": [
-        f"Created conversation {AGY_SESSION}",
         _json(event="step_update", step_update={"conversation_id": AGY_SESSION, "step_index": 1, "state": "ACTIVE", "step_type": "agent_response", "text_delta": "Hi"}),
         _json(event="result", result={"conversation_id": AGY_SESSION, "status": "SUCCESS", "response": "Final"}),
     ],
@@ -67,31 +67,36 @@ STREAMS: dict[str, list[str]] = {
 
 # What each success stream yields.
 SUCCESS: dict[str, dict[str, Any]] = {
-    "claude": {"session_id": "s-1", "text": "Final", "tokens": STREAM_TOKENS},
-    "codex": {"session_id": "th-1", "text": "Final", "tokens": SUMMED_TOKENS},
+    "claude": {"session_id": "s-1", "text": "Final", "tokens": CLAUDE_TOKENS},
+    "codex": {"session_id": "th-1", "text": "Final", "tokens": STREAM_TOKENS},
     "pi": {"session_id": "pi-1", "text": "Final", "tokens": SUMMED_TOKENS},
     "agy": {"session_id": AGY_SESSION, "text": "Final", "tokens": EMPTY_TOKENS},
 }
 
 EVENTS: dict[str, list[dict[str, Any]]] = {
     "claude": [
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "Hi"}},
-        {"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "Read", "activity": "tool_call", "input": {"p": "x"}}},
-        {"kind": "telemetry.updated", "data": STREAM_TOKENS},
+        {"kind": "assistant.message.started", "data": {}},
+        {"kind": "assistant.text.delta", "data": {"text": "Hi"}},
+        {"kind": "tool.started", "entity_id": "t1", "data": {"tool": "Read", "activity": "tool_call", "input": {"p": "x"}}},
+        {"kind": "telemetry.updated", "data": CLAUDE_TOKENS},
+        {"kind": "assistant.message.completed", "data": {}},
     ],
     "codex": [
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "Final"}},
-        {"kind": "assistant.message.completed", "entity_id": "msg-1", "data": {}},
-        {"kind": "telemetry.updated", "data": SUMMED_TOKENS},
+        {"kind": "assistant.message.started", "entity_id": "m1", "data": {}},
+        {"kind": "assistant.text.delta", "entity_id": "m1", "data": {"text": "Final"}},
+        {"kind": "assistant.message.completed", "entity_id": "m1", "data": {}},
+        {"kind": "telemetry.updated", "data": STREAM_TOKENS},
     ],
     "pi": [
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "Hi"}},
-        {"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "grep", "activity": "tool_call", "input": {}}},
-        {"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "completed"}},
+        {"kind": "assistant.text.delta", "data": {"text": "Final"}},
+        {"kind": "tool.started", "entity_id": "p1", "data": {"tool": "grep", "activity": "tool_call", "input": {}}},
+        {"kind": "tool.completed", "entity_id": "p1", "data": {"status": "completed"}},
         {"kind": "telemetry.updated", "data": SUMMED_TOKENS},
     ],
     "agy": [
-        {"kind": "assistant.text.delta", "entity_id": "msg-1", "data": {"text": "Hi"}},
+        {"kind": "assistant.message.started", "data": {}},
+        {"kind": "assistant.text.delta", "data": {"text": "Hi"}},
+        {"kind": "assistant.message.completed", "data": {}},
     ],
 }
 
@@ -168,7 +173,9 @@ def run(
 ) -> Run:
     record = tmp_path / "record.json"
     if stub:
-        stub_cli(monkeypatch, tmp_path, backend, lines or [], exit_code=exit_code, sleep_s=sleep_s, record=record)
+        # agy writes its conversation ID to the --log-file, not to stdout.
+        log_text = f"Created conversation {AGY_SESSION}" if backend == "agy" else None
+        stub_cli(monkeypatch, tmp_path, backend, lines or [], exit_code=exit_code, sleep_s=sleep_s, record=record, log_text=log_text)
     pgids: list[int] = []
     events: list[dict[str, Any]] = []
     result = asyncio.run(_execute(backend, cwd or tmp_path, pgids=pgids, events=events, **kwargs))
@@ -176,9 +183,9 @@ def run(
 
 
 def _mask(argv: list[str], cwd: Path) -> list[str]:
-    """Replace per-run values: the workspace after ``--cd`` and temp file paths after ``-o`` or ``--log-file``."""
+    """Replace per-run values: the workspace after ``--cd`` and the temp file path after ``--log-file``."""
     masked = list(argv)
-    for flag, placeholder in (("--cd", "<cwd>"), ("-o", "<tmp>"), ("--log-file", "<tmp>")):
+    for flag, placeholder in (("--cd", "<cwd>"), ("--log-file", "<tmp>")):
         if flag in masked:
             index = masked.index(flag) + 1
             if flag == "--cd":
@@ -192,28 +199,28 @@ def _mask(argv: list[str], cwd: Path) -> list[str]:
 POLICY = {"model": "m1", "reasoning": "high", "system_prompt": "sp"}
 
 ARGV_CASES = [
-    pytest.param("claude", {}, "", ["claude", "-p", "--output-format", "stream-json", "--include-partial-messages", "--permission-mode", "bypassPermissions"], id="claude-default"),
+    pytest.param("claude", {}, "", ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "bypassPermissions"], id="claude-default"),
     pytest.param(
         "claude",
         {**POLICY, "args": ("--user-flag",)},
         "",
-        ["claude", "-p", "--output-format", "stream-json", "--include-partial-messages", "--system-prompt", "sp", "--model", "m1", "--effort", "high", "--permission-mode", "bypassPermissions", "--user-flag"],
+        ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "m1", "--effort", "high", "--system-prompt", "sp", "--permission-mode", "bypassPermissions", "--user-flag"],
         id="claude-policy-and-user-args",
     ),
-    pytest.param("claude", {}, "sess", ["claude", "-p", "--output-format", "stream-json", "--include-partial-messages", "--resume", "sess", "--permission-mode", "bypassPermissions"], id="claude-resume"),
-    pytest.param("codex", {}, "", ["codex", "exec", "--json", "-o", "<tmp>", "--yolo", "-"], id="codex-default"),
+    pytest.param("claude", {}, "sess", ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--resume", "sess", "--permission-mode", "bypassPermissions"], id="claude-resume"),
+    pytest.param("codex", {}, "", ["codex", "exec", "--json", "--yolo", "-"], id="codex-default"),
     pytest.param(
         "codex",
         {**POLICY, "args": ("--user-flag",)},
         "",
-        ["codex", "exec", "--json", "-o", "<tmp>", "--yolo", "--user-flag", "--model", "m1", "-c", 'model_reasoning_effort="high"', "-"],
+        ["codex", "exec", "--json", "--yolo", "--user-flag", "--model", "m1", "-c", 'model_reasoning_effort="high"', "-"],
         id="codex-policy-and-user-args",
     ),
     pytest.param(
         "codex",
         {"backend_profile": "prof", "model": 'm"1'},
         "",
-        ["codex", "exec", "--json", "-o", "<tmp>", "--yolo", "--profile", "prof", "--model", 'm"1', "-c", 'model="m\\"1"', "-"],
+        ["codex", "exec", "--json", "--yolo", "--profile", "prof", "--model", 'm"1', "-c", 'model="m\\"1"', "-"],
         id="codex-backend-profile",
     ),
     pytest.param(
@@ -221,7 +228,7 @@ ARGV_CASES = [
         {"backend_profile": "prof", "model": "m1", "reasoning": "high"},
         "",
         [
-            "codex", "exec", "--json", "-o", "<tmp>", "--yolo", "--profile", "prof", "--model", "m1", "-c", 'model="m1"',
+            "codex", "exec", "--json", "--yolo", "--profile", "prof", "--model", "m1", "-c", 'model="m1"',
             "-c", 'model_reasoning_effort="high"', "-",
         ],
         id="codex-backend-profile-model-reasoning",
@@ -230,16 +237,16 @@ ARGV_CASES = [
         "codex",
         {"backend_profile": "prof", "reasoning": "high"},
         "",
-        ["codex", "exec", "--json", "-o", "<tmp>", "--yolo", "--profile", "prof", "-c", 'model_reasoning_effort="high"', "-"],
+        ["codex", "exec", "--json", "--yolo", "--profile", "prof", "-c", 'model_reasoning_effort="high"', "-"],
         id="codex-backend-profile-reasoning",
     ),
-    pytest.param("codex", {}, "sess", ["codex", "exec", "--json", "-o", "<tmp>", "--yolo", "resume", "sess", "-"], id="codex-resume"),
+    pytest.param("codex", {}, "sess", ["codex", "exec", "--json", "--yolo", "resume", "sess", "-"], id="codex-resume"),
     pytest.param("pi", {}, "", ["pi", "--mode", "json", "--approve"], id="pi-default"),
     pytest.param(
         "pi",
         {**POLICY, "args": ("--user-flag",)},
         "",
-        ["pi", "--mode", "json", "--system-prompt", "sp", "--model", "m1", "--thinking", "high", "--user-flag", "--approve"],
+        ["pi", "--mode", "json", "--model", "m1", "--thinking", "high", "--system-prompt", "sp", "--user-flag", "--approve"],
         id="pi-approve-after-user-args",
     ),
     pytest.param("pi", {}, "sess", ["pi", "--mode", "json", "--session", "sess", "--approve"], id="pi-resume"),
@@ -308,7 +315,7 @@ def test_backend_missing_cli(monkeypatch, tmp_path, backend):
     outcome = run(monkeypatch, tmp_path, backend, stub=False)
 
     _assert_failure(outcome, "TARGET_FATAL", "missing_cli")
-    assert outcome.result.error == f"'{backend}' was not found on PATH"
+    assert outcome.result.error == f"executable '{backend}' was not found"
     assert outcome.pgids == []
 
 
@@ -319,21 +326,21 @@ def test_backend_bad_cwd(monkeypatch, tmp_path, backend):
     outcome = run(monkeypatch, tmp_path, backend, STREAMS[backend], cwd=missing)
 
     _assert_failure(outcome, "REQUEST_FATAL", "bad_cwd")
-    assert "is not a directory" in outcome.result.error
+    assert outcome.result.error == "cwd is not an existing directory"
     assert not outcome.record.exists()
 
 
-# Real auth output. The library classifies it as `auth` at any exit status, except agy at exit 0:
-# there the output is the reply and the run succeeds without a warning.
+# Auth output. The library classifies it as `auth` at any exit status, except agy. Agy auth failure has
+# no recorded output, so plain text is the reply at exit 0 and a generic execution error otherwise.
 AUTH_CASES = [
-    pytest.param("claude", 0, "TARGET_FATAL", "auth", "Invalid API key · Please run /login\napi_error_status=401", id="claude-auth-exit-0"),
-    pytest.param("claude", 1, "TARGET_FATAL", "auth", "Invalid API key · Please run /login\napi_error_status=401", id="claude-auth-exit-1"),
+    pytest.param("claude", 0, "TARGET_FATAL", "auth", "Invalid API key · Please run /login", id="claude-auth-exit-0"),
+    pytest.param("claude", 1, "TARGET_FATAL", "auth", "Invalid API key · Please run /login", id="claude-auth-exit-1"),
     pytest.param("codex", 0, "TARGET_FATAL", "auth", "ERROR: Not logged in. Run `codex login`", id="codex-auth-exit-0"),
     pytest.param("codex", 1, "TARGET_FATAL", "auth", "ERROR: Not logged in. Run `codex login`", id="codex-auth-exit-1"),
     pytest.param("pi", 0, "TARGET_FATAL", "auth", "Error: No API key found for anthropic. Use /login", id="pi-auth-exit-0"),
     pytest.param("pi", 1, "TARGET_FATAL", "auth", "Error: No API key found for anthropic. Use /login", id="pi-auth-exit-1"),
     pytest.param("agy", 0, "SUCCESS", "", "", id="agy-auth-exit-0"),
-    pytest.param("agy", 1, "TARGET_FATAL", "auth", "Error: not logged in, authentication failed", id="agy-auth-exit-1"),
+    pytest.param("agy", 1, "RETRYABLE", "execution_error", "command exited with status 1", id="agy-auth-exit-1"),
 ]
 
 
@@ -346,7 +353,7 @@ def test_backend_auth_failure(monkeypatch, tmp_path, backend, exit_code, expecte
 
 
 NONZERO_CASES = [
-    pytest.param("claude", "RETRYABLE", "execution_error", "command exited with status 3\nboom", id="claude-nonzero-exit"),
+    pytest.param("claude", "RETRYABLE", "execution_error", "command exited with status 3", id="claude-nonzero-exit"),
     pytest.param("codex", "RETRYABLE", "execution_error", "command exited with status 3\nboom", id="codex-nonzero-exit"),
     pytest.param("pi", "RETRYABLE", "execution_error", "command exited with status 3\nboom", id="pi-nonzero-exit"),
     pytest.param("agy", "RETRYABLE", "execution_error", "command exited with status 3", id="agy-nonzero-exit"),
@@ -382,8 +389,7 @@ def test_backend_timeout(monkeypatch, tmp_path, backend):
     outcome = run(monkeypatch, tmp_path, backend, STREAMS[backend], sleep_s=60, timeout_s=TIMEOUT_S)
 
     _assert_failure(outcome, "RETRYABLE", "timeout")
-    # The library names the launched file, so Windows adds the launcher extension.
-    assert re.fullmatch(rf"{backend}(\.cmd)? subprocess timed out", outcome.result.error)
+    assert outcome.result.error == "run timed out"
     # Output read before the deadline survives.
     assert outcome.result.session_id == SUCCESS[backend]["session_id"]
     assert outcome.result.text == SUCCESS[backend]["text"]

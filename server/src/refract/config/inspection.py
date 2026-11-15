@@ -22,7 +22,7 @@ Loc = tuple[str | int, ...]
 
 _WORKFLOWS = frozenset({"consult", "implement", "other", "review"})
 _TARGET_TEXT = frozenset({"model", "reasoning", "system_prompt"})
-_TARGET_NUMBERS = frozenset({"max_concurrency", "context_window"})
+_TARGET_NUMBERS = frozenset({"max_concurrency"})
 _TYPE_CODES = frozenset({
     "string_type", "int_type", "bool_type", "dict_type", "list_type", "model_type",
     "greater_than_equal", "less_than_equal", "string_too_short",

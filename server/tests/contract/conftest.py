@@ -67,14 +67,12 @@ retry = {{ attempts = 2, codes = ["service_error"] }}
 id = "codex-primary"
 backend = "codex"
 model = "fake-codex"
-context_window = 272000
 retry = {{ attempts = 1 }}
 
 [[targets]]
 id = "codex-retry"
 backend = "codex"
 model = "fake-codex"
-context_window = 272000
 retry = {{ attempts = 2, codes = ["service_error"] }}
 
 [profiles.contract]

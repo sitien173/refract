@@ -104,7 +104,7 @@ def _outcome(result: Result) -> DriverOutcome:
             return "REQUEST_FATAL"
         case Outcome.REQUEST_FATAL if code == "context_overflow":
             return "RETRYABLE"
-        case Outcome.REQUEST_FATAL | Outcome.AGENT_FATAL:
+        case Outcome.REQUEST_FATAL | Outcome.AGENT_FATAL | Outcome.LIMIT_REACHED:
             return "TARGET_FATAL"
         case _:
             return "RETRYABLE"
@@ -168,7 +168,7 @@ class DriverRegistry:
             return False
         if resolved in self._capability_cache:
             return self._capability_cache[resolved]
-        probe = asyncio.create_task(coding_agent_cli.check(Request(driver=target.backend, prompt="", cwd=Path.cwd())))
+        probe = asyncio.create_task(coding_agent_cli.check(target.backend))
         watcher = asyncio.create_task(_mirror_cancel(cancel_event, asyncio.Event())) if cancel_event else None
         try:
             await asyncio.wait([probe, *([watcher] if watcher else [])], return_when=asyncio.FIRST_COMPLETED)

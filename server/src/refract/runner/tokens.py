@@ -60,13 +60,11 @@ def counters_from(values: dict[str, Any]) -> TokenCounters:
     return counters
 
 
-def attempt_tokens(counters: TokenCounters | None, window: int | None) -> dict[str, int | None] | None:
-    """One attempt's tokens; the target's configured window wins and context used never exceeds it."""
-    if counters is None and window is None:
+def attempt_tokens(counters: TokenCounters | None) -> dict[str, int | None] | None:
+    """One attempt's tokens; context used never exceeds the reported window."""
+    if counters is None:
         return None
-    tokens = (counters or TokenCounters()).as_dict()
-    if window is not None:
-        tokens["context_window"] = window
+    tokens = counters.as_dict()
     if tokens["context_used"] is None and tokens["input"] is not None and tokens["output"] is not None:
         tokens["context_used"] = tokens["input"] + tokens["output"]
     if tokens["context_used"] is not None and tokens["context_window"] is not None:

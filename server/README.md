@@ -73,7 +73,6 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 | `system_prompt` | System prompt for `pi` and `claude` |
 | `args` | Extra CLI options, one token per array item |
 | `max_concurrency` | Jobs this target runs at once; default `1` |
-| `context_window` | Context capacity reported in `result.tokens`; overrides the backend's value |
 | `retry` | `{ attempts, codes, patterns }`: retry a matching failure on the same target. A policy without `codes` or `patterns` retries nothing. |
 | `env` | Environment variables for the worker process |
 

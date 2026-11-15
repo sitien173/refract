@@ -64,21 +64,11 @@ def test_explicit_other_profile_mapping_loads(tmp_path) -> None:
     assert resolve_execution_plan(get_workflow("other"), catalog, "balanced").selection.targets == ("primary",)
 
 
-@pytest.mark.parametrize("value", [0, -1, 1.5, True, "200000"])
-def test_context_window_rejects_non_positive_or_non_integer_values(tmp_path, value) -> None:
-    text = _explicit_config().replace('backend = "codex"', f'backend = "codex"\ncontext_window = {json.dumps(value)}')
-    path = tmp_path / "config.toml"
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="positive integer"):
-        load_config(path)
-
-
-def test_context_window_loads_positive_integer_and_omission(tmp_path) -> None:
+def test_target_context_window_is_rejected(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config().replace('backend = "codex"', 'backend = "codex"\ncontext_window = 200000'), encoding="utf-8")
-    assert load_config(path).targets[0].context_window == 200000
-    path.write_text(_explicit_config(), encoding="utf-8")
-    assert load_config(path).targets[0].context_window is None
+    with pytest.raises(ValueError, match="Unsupported target settings"):
+        load_config(path)
 
 
 def test_missing_config_file_is_rejected(tmp_path) -> None:
@@ -1206,11 +1196,15 @@ def test_resolve_profile_maps_characterization(case) -> None:
 def test_retry_code_literal_matches_library_codes() -> None:
     from typing import get_args
 
-    from coding_agent_cli._classify import CLI_CODES, REQUEST_CODES, SPAWN_CODES
+    from coding_agent_cli import ErrorCode
     from refract.config.models import RetryCode
 
-    inline = {"timeout", "execution_error", "stdin_failed", "no_output"}
-    assert set(REQUEST_CODES) | set(SPAWN_CODES) | set(CLI_CODES) | inline == set(get_args(RetryCode))
+    # Codes that never reach a retryable failure: limits and parser errors are target fatal, the rest are warnings.
+    excluded = {
+        "cancelled", "idle_timeout", "max_turns", "budget", "parser_error",
+        "no_session_id", "line_too_long", "cleanup_incomplete",
+    }
+    assert set(ErrorCode) - excluded == set(get_args(RetryCode))
 
 
 @pytest.mark.parametrize(

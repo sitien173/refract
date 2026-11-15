@@ -134,10 +134,11 @@ starts the CLI:
 - The same checks as above, for the NUL byte and the `--` token, and for the
   Codex working directory flags.
 - A flag the library owns for its transport. The owned flags are `-p`,
-  `--output-format`, `--include-partial-messages`, and `--resume` for Claude
-  Code; `--json`, `-o`, and `--output-last-message` for Codex; `--mode` and
-  `--session` for Pi; and `--output-format`, `--log-file`, `--conversation`,
-  `--new-project`, `--print`, `-p`, `--prompt`, `--continue`, and `-c` for Agy.
+  `--print`, `--output-format`, `--verbose`, `--include-partial-messages`, and
+  `--resume` for Claude Code; `--json` for Codex; `--mode`, `--session`, `-p`,
+  and `--print` for Pi; and `--output-format`, `--input-format`, `--log-file`,
+  `--conversation`, `--new-project`, `--print`, `-p`, `--prompt`, `--continue`,
+  and `-c` for Agy.
 - A flag in `args` that sets a target field already given. The library checks
   only the fields the target sets, per backend. Set the value in the field or
   in `args`, not both.
@@ -190,8 +191,8 @@ Available flags:
 `agent`, `models`, plugin management, install, update, and changelog are
 subcommands, not execution options.
 
-The library owns `--print`, the prompt, `--conversation`, `--log-file`, and
-`--output-format`. Refract adds `--dangerously-skip-permissions`. New sessions
+The library owns `--print`, the prompt, `--conversation`, `--log-file`,
+`--output-format`, and `--input-format`. Refract adds `--dangerously-skip-permissions`. New sessions
 (no stored conversation ID) are created with `--new-project`, so agy registers
 the working directory as a project and loads its project context files from
 the first job. Everything else uses the Agy CLI default unless selected by
@@ -241,7 +242,7 @@ skip-check, ephemeral, ignore-config/rules, output schema, JSON, and final
 message output. Refract supplies a specific session ID and does not use
 `--last`.
 
-The library owns `exec`, `--json`, `--output-last-message`, the resume
+The library owns `exec`, `--json`, the resume
 subcommand and session ID, the prompt, and the working directory, which it sets
 on the process. Refract adds `--yolo`. Everything else uses the Codex CLI
 default unless selected by target fields or `args`. Refract translates
@@ -254,7 +255,7 @@ Arbitrary Codex configuration is available through repeated `-c` entries in
 prompt on standard input:
 
 ```text
-codex exec --json -o <path> --yolo [target args] [--profile <name>] \
+codex exec --json --yolo [target args] [--profile <name>] \
       [--model <value> [-c model="<value>"]] [-c model_reasoning_effort="<value>"] \
       [resume <session-id>] -
 ```
@@ -325,9 +326,9 @@ sends the prompt on standard input, so a prompt that begins with `-` cannot be
 read as a flag value:
 
 ```text
-claude -p --output-format stream-json --include-partial-messages \
-       [--resume <session-id>] [--system-prompt <value>] [--model <value>] \
-       [--effort <value>] --permission-mode bypassPermissions [target args]
+claude -p --output-format stream-json --verbose --include-partial-messages \
+       [--resume <session-id>] [--model <value>] [--effort <value>] \
+       [--system-prompt <value>] --permission-mode bypassPermissions [target args]
 ```
 
 Target field translation:
