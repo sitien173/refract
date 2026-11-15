@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -9,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from coding_agent_cli._process import run_process
 from refract.runner.drivers import DriverResult
 from refract.runtime import Runtime
 from tests.orchestration_helpers import FakeDrivers, config, register_project, repository
@@ -19,13 +19,14 @@ pytestmark = pytest.mark.skipif(not Path("/proc").is_dir(), reason="worker group
 
 class SpawningDrivers(FakeDrivers):
     async def execute(self, *, cwd: Path, env=None, on_spawn=None, **kwargs) -> DriverResult:
-        lines: list[str] = []
-
-        async def collect(line: str) -> None:
-            lines.append(line)
-
-        await run_process(["sh", "-c", 'printf "%s\\n" "$REFRACT_JOB_ID"'], None, env, str(cwd), None, None, collect, on_spawn=on_spawn)
-        return DriverResult("SUCCESS", "session", "".join(lines).strip(), "", "")
+        process = await asyncio.create_subprocess_exec(
+            "sh", "-c", 'printf "%s\\n" "$REFRACT_JOB_ID"',
+            stdout=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ, **(env or {})}, start_new_session=True,
+        )
+        if on_spawn is not None:
+            await on_spawn(process.pid)
+        stdout, _ = await process.communicate()
+        return DriverResult("SUCCESS", "session", stdout.decode().strip(), "", "")
 
 
 def _group_alive(group_id: int) -> bool:

@@ -2332,9 +2332,9 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
     assert hasattr(registry, "supports_structured_streaming")
     checks = []
 
-    async def fake_check(req, **kwargs):
-        checks.append(req.driver)
-        return Capabilities(available=True, structured_streaming="new" in req.driver or None)
+    async def fake_check(driver, **kwargs):
+        checks.append(driver)
+        return Capabilities(available=True, structured_streaming="new" in driver or None)
 
     monkeypatch.setattr("refract.runner.drivers.coding_agent_cli.check", fake_check)
 
@@ -2440,8 +2440,8 @@ def test_structured_streaming_probe_launches_windows_shim_through_prepare_comman
     assert asyncio.run(DriverRegistry().supports_structured_streaming(TargetConfig(id="t", backend="claude"))) is True
 
 
-def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
-    """Codex capability probe must run 'codex exec --help' rather than top-level 'codex --help'."""
+def test_codex_capability_probes_top_level_flags(tmp_path, monkeypatch) -> None:
+    """The library probes Codex with top-level '--version' and '--help', not 'codex exec --help'."""
     from refract.runner.drivers import DriverRegistry
     from tests.launchers import install_launcher
 
@@ -2449,58 +2449,23 @@ def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     script = tmp_path / "fake_codex.py"
     script.write_text(
         "import sys\n"
-        "def record(line):\n"
-        f"    with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
-        "        handle.write(line + '\\n')\n"
-        "if sys.argv[1:3] == ['exec', '--help']:\n"
-        "    record('exec-probe')\n"
-        "    print('Usage: codex exec [OPTIONS] [PROMPT]')\n"
-        "    print('Options:')\n"
-        "    print('  --json  Output structured JSONL events')\n"
-        "    print('  --output-last-message FILE  Write the last message')\n"
-        "elif sys.argv[1:2] == ['--help']:\n"
-        "    record('toplevel-probe')\n"
-        "    print('Usage: codex [OPTIONS] COMMAND [ARGS]...')\n"
-        "    print('Commands:')\n"
-        "    print('  exec    Execute prompt')\n"
-        "    print('  review  Review workspace')\n",
-        encoding="utf-8",
-    )
-    old_script = tmp_path / "fake_old_codex.py"
-    old_script.write_text(
-        "import sys\n"
-        "if sys.argv[1:3] == ['exec', '--help']:\n"
-        "    print('Usage: codex exec [OPTIONS] [PROMPT]')\n"
-        "    print('Options: --help Show this message')\n",
+        f"with open({str(log)!r}, 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "print('codex-cli 0.169.0')\n",
         encoding="utf-8",
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_codex = install_launcher(bin_dir, "codex", script)
-    old_bin_dir = tmp_path / "old-bin"
-    old_bin_dir.mkdir()
-    fake_old_codex = install_launcher(old_bin_dir, "codex", old_script)
 
-    registry = DriverRegistry()
-    target = TargetConfig(id="target-codex", backend="codex")
     previous = shutil.which
     monkeypatch.setattr(
         "shutil.which",
         lambda name, *args, **kwargs: str(fake_codex) if name == "codex" else previous(name, *args, **kwargs),
     )
 
-    # Must probe 'exec --help' and detect structured streaming support
-    assert asyncio.run(registry.supports_structured_streaming(target)) is True
-    log_content = log.read_text(encoding="utf-8").strip()
-    assert log_content == "exec-probe"
-
-    # Also test representative older codex where exec --help lacks --json
-    target_old = TargetConfig(id="target-old-codex", backend="codex")
-    monkeypatch.setattr(
-        "shutil.which",
-        lambda name, *args, **kwargs: str(fake_old_codex) if name == "codex" else previous(name, *args, **kwargs),
-    )
-    assert asyncio.run(registry.supports_structured_streaming(target_old)) is False
+    assert asyncio.run(DriverRegistry().supports_structured_streaming(TargetConfig(id="target-codex", backend="codex"))) is True
+    assert log.read_text(encoding="utf-8").splitlines() == ["--version", "--help"]
 
 
 @pytest.mark.asyncio
@@ -2655,13 +2620,14 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": secrets[4]}, "index": 0}}),
             json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "id": "t1", "name": "read", "input": {"secret": secrets[1]}}}}),
             json.dumps({"type": "stream_event", "event": {"type": "content_block_stop", "index": 1}}),
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "read", "input": {"secret": secrets[1]}}]}}),
             json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Claude verified clean."}, "index": 2}}),
             json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Claude verified clean.", "session_id": "c-sess"}),
         ],
         "codex": [
             json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
-            json.dumps({"type": "item.started", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "input": secrets[1]}}),
-            json.dumps({"type": "item.completed", "item": {"type": "tool_call", "id": "tc1", "name": "bash", "output": secrets[5], "status": "completed"}}),
+            json.dumps({"type": "item.started", "item": {"type": "command_execution", "id": "tc1", "command": secrets[1], "status": "in_progress"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "command_execution", "id": "tc1", "command": secrets[1], "aggregated_output": secrets[5], "exit_code": 0, "status": "completed"}}),
             json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": secrets[4]}}),
             json.dumps({"type": "item.completed", "item": {"type": "agent_message", "id": "m1", "text": "Codex verified clean."}}),
         ],
@@ -2674,14 +2640,14 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "Pi verified clean."}]}}),
         ],
         "agy": [
-            "Created conversation 12345678-1234-1234-1234-123456789abc",
-            f"[diagnostic] {secrets[3]} and server trace",
             json.dumps({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Agy verified clean."}}),
             json.dumps({"event": "step_update", "step_update": {"step_type": "tool", "state": "ACTIVE", "tool_name": "exec", "tool_info": {"parameters": {"token": secrets[1]}}}}),
             json.dumps({"event": "step_update", "step_update": {"step_type": "tool", "state": "DONE", "tool_name": "exec", "result": secrets[5]}}),
             json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "Agy verified clean."}}),
         ],
     }
+    # agy writes its conversation ID and diagnostic traces to the --log-file, not to stdout.
+    agy_log = f"Created conversation 12345678-1234-1234-1234-123456789abc\n[diagnostic] {secrets[3]} and server trace"
 
     class RealAdapterDrivers(FakeDrivers):
         def __init__(self, backend_name):
@@ -2689,7 +2655,8 @@ async def test_execution_all_provider_fixtures_persistence_and_authoritative_res
             self.backend_name = backend_name
 
         async def execute(self, *, on_event=None, **kwargs) -> DriverResult:
-            stub_cli(monkeypatch, tmp_path, self.backend_name, dirty_streams[self.backend_name])
+            log_text = agy_log if self.backend_name == "agy" else None
+            stub_cli(monkeypatch, tmp_path, self.backend_name, dirty_streams[self.backend_name], log_text=log_text)
             return await DriverRegistry().execute(
                 target=TargetConfig(id=self.backend_name, backend=self.backend_name),
                 prompt="p",
@@ -4448,13 +4415,20 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
 ) -> None:
     root = repository(tmp_path)
 
-    async def fake_check(req, **kwargs):
+    async def fake_check(driver, **kwargs):
         return Capabilities(available=True, structured_streaming=True if streaming else None)
 
     monkeypatch.setattr("refract.runner.drivers.coding_agent_cli.check", fake_check)
 
     if backend_name == "claude":
         c_lines = [
+            json.dumps({
+                "type": "stream_event",
+                "event": {
+                    "type": "message_start",
+                    "message": {"id": "c-msg-1", "usage": {"input_tokens": 100, "cache_read_input_tokens": 30, "output_tokens": 20}},
+                },
+            }),
             json.dumps({
                 "type": "assistant",
                 "message": {
@@ -4471,6 +4445,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
         p_lines = [
             json.dumps({"type": "session", "id": "pi-sess-1"}),
             json.dumps({"type": "turn_start"}),
+            json.dumps({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "pi done"}}),
             json.dumps({
                 "type": "message_end",
                 "message": {

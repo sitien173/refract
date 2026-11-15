@@ -9,17 +9,10 @@ import sys
 import time
 from pathlib import Path
 
-# Markers the coding_agent_cli drivers probe in --help. agy prints none, so the fake agy is a non-streaming target.
-HELP_BY_BACKEND = {
-    "claude": "--output-format stream-json --include-partial-messages",
-    "pi": "--mode --session --thinking",
-    "codex": "--json --output-last-message",
-    "agy": "",
-}
-
-if "--help" in sys.argv:
-    print(HELP_BY_BACKEND.get(os.environ.get("FAKE_CLI_NAME", ""), ""))
-    raise SystemExit(0)
+# coding_agent_cli.check probes --version and --help and reports structured streaming when both succeed.
+# The fake agy fails the probe, so it is a non-streaming target.
+if "--version" in sys.argv or "--help" in sys.argv:
+    raise SystemExit(1 if os.environ.get("FAKE_CLI_NAME") == "agy" else 0)
 
 if "--print" in sys.argv:
     prompt = sys.argv[sys.argv.index("--print") + 1]
@@ -29,6 +22,18 @@ else:
 
 def emit(event: dict[str, object]) -> None:
     print(json.dumps(event), flush=True)
+
+
+def emit_stream(event: dict[str, object]) -> None:
+    """Print a Claude partial-message event as Claude prints it under --include-partial-messages."""
+    emit({"type": "stream_event", "event": event})
+
+
+def emit_tool_use() -> None:
+    """Print a Claude tool call: the partial content_block_start, then the assistant message carrying its input."""
+    block = {"type": "tool_use", "id": "tu_1", "name": "read_file", "input": {"path": "README.md"}}
+    emit_stream({"type": "content_block_start", "index": 0, "content_block": block})
+    emit({"type": "assistant", "message": {"content": [block]}})
 
 
 def _extract_mode(text: str) -> str:
@@ -103,7 +108,7 @@ _write_ready_file(prompt)
 mode = _extract_mode(prompt)
 
 if mode == "block":
-    emit({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Waiting for cancellation"}})
+    emit_stream({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Waiting for cancellation"}})
     while True:
         time.sleep(0.2)
 
@@ -122,22 +127,10 @@ elif mode == "fail_once_transient":
         _fail("rate_limit")
     output = "Recovered after transient"
 elif mode == "tool_started":
-    emit(
-        {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "tool_use", "id": "tu_1", "name": "read_file", "input": {"path": "README.md"}},
-        }
-    )
+    emit_tool_use()
     output = "Tool started completed"
 elif mode == "tool_then_fail_transient":
-    emit(
-        {
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "tool_use", "id": "tu_1", "name": "read_file", "input": {"path": "README.md"}},
-        }
-    )
+    emit_tool_use()
     _fail("rate_limit")
 elif mode == "ask":
     output = _run_ask(prompt)
@@ -183,11 +176,8 @@ elif mode == "codex_fail_once_transient":
     ]
     for event in events:
         emit(event)
-    if "-o" in sys.argv:
-        out_path = Path(sys.argv[sys.argv.index("-o") + 1])
-        out_path.write_text("Codex attempt 2 completed", encoding="utf-8")
     raise SystemExit(0)
-elif mode == "codex" or "-o" in sys.argv:
+elif mode == "codex":
     events = [
         {"type": "thread.started", "thread_id": "00000000-0000-0000-0000-000000000001"},
         {"type": "turn.started"},
@@ -217,9 +207,6 @@ elif mode == "codex" or "-o" in sys.argv:
     ]
     for event in events:
         emit(event)
-    if "-o" in sys.argv:
-        out_path = Path(sys.argv[sys.argv.index("-o") + 1])
-        out_path.write_text("Codex completed", encoding="utf-8")
     raise SystemExit(0)
 else:
     output = "E2E backend completed"
@@ -228,5 +215,5 @@ if "--log-file" in sys.argv:
     _write_log_file([output])
     raise SystemExit(0)
 
-emit({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": output}})
+emit_stream({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": output}})
 emit({"type": "result", "subtype": "success", "result": output, "session_id": "e2e-session"})

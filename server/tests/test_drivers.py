@@ -55,6 +55,8 @@ _OUTCOME_CASES = [
     (Outcome.AGENT_FATAL, "spawn_failed", "TARGET_FATAL"),
     (Outcome.AGENT_FATAL, "auth", "TARGET_FATAL"),
     (Outcome.AGENT_FATAL, "anything_else", "TARGET_FATAL"),
+    (Outcome.LIMIT_REACHED, "max_turns", "TARGET_FATAL"),
+    (Outcome.LIMIT_REACHED, "budget", "TARGET_FATAL"),
     (Outcome.RETRYABLE, "timeout", "RETRYABLE"),
     (Outcome.RETRYABLE, "no_output", "RETRYABLE"),
     (Outcome.RETRYABLE, "anything_else", "RETRYABLE"),
@@ -95,7 +97,7 @@ _EVENT_CASES = [
         events.ToolStarted(tool="Read", activity="tool_call", input={"p": 1}, entity_id="tool-1"),
         {"kind": "tool.started", "entity_id": "tool-1", "data": {"tool": "Read", "activity": "tool_call", "input": {"p": 1}}},
     ),
-    (events.ToolCompleted(status="error", entity_id="tool-1"), {"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "error"}}),
+    (events.ToolCompleted(tool="Read", status="error", entity_id="tool-1"), {"kind": "tool.completed", "entity_id": "tool-1", "data": {"status": "error"}}),
     (
         events.UsageUpdated(usage=Usage(input=3, output=4)),
         {"kind": "telemetry.updated", "data": dict.fromkeys(TOKEN_KEYS) | {"input": 3, "output": 4}},

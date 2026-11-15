@@ -1206,11 +1206,15 @@ def test_resolve_profile_maps_characterization(case) -> None:
 def test_retry_code_literal_matches_library_codes() -> None:
     from typing import get_args
 
-    from coding_agent_cli._classify import CLI_CODES, REQUEST_CODES, SPAWN_CODES
+    from coding_agent_cli import ErrorCode
     from refract.config.models import RetryCode
 
-    inline = {"timeout", "execution_error", "stdin_failed", "no_output"}
-    assert set(REQUEST_CODES) | set(SPAWN_CODES) | set(CLI_CODES) | inline == set(get_args(RetryCode))
+    # Codes that never reach a retryable failure: limits and parser errors are target fatal, the rest are warnings.
+    excluded = {
+        "cancelled", "idle_timeout", "max_turns", "budget", "parser_error",
+        "no_session_id", "line_too_long", "cleanup_incomplete",
+    }
+    assert set(ErrorCode) - excluded == set(get_args(RetryCode))
 
 
 @pytest.mark.parametrize(
