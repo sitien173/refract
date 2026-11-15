@@ -301,7 +301,7 @@ it("discards revalidation response when filters change during revalidation", asy
   hook.unmount();
 });
 
-it("disables load more while revalidation is in flight", async () => {
+it("load more waits for an in-flight revalidation, then loads the next page", async () => {
   vi.useFakeTimers();
   const revalDeferred = deferred<JobPage>();
   let count = 0;
@@ -324,20 +324,18 @@ it("disables load more while revalidation is in flight", async () => {
   await tick(30_000);
   expect(load).toHaveBeenCalledTimes(2);
 
-  await act(async () => {
-    await hook.result.current.loadMore();
+  let pending: Promise<void> = Promise.resolve();
+  act(() => {
+    pending = hook.result.current.loadMore();
   });
-
+  // The click is kept, not dropped, and no page fetch runs beside the revalidation.
   expect(load).toHaveBeenCalledTimes(2);
 
   await act(async () => {
     revalDeferred.resolve(page(["a1", "a2"], "cur-1"));
+    await pending;
   });
   await flush();
-
-  await act(async () => {
-    await hook.result.current.loadMore();
-  });
   expect(load).toHaveBeenCalledTimes(3);
   expect(ids(hook.result.current.jobs)).toEqual(["a1", "a2", "c1", "c2"]);
   hook.unmount();
