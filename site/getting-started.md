@@ -100,6 +100,7 @@ When the daemon is not running, the plugin's SessionStart hook starts `refract s
 | `/refract:write-plan <design>` | Turn a confirmed design into a phase plan. |
 | `/refract:execute-plan [target]` | Run one wave of phases through all three gates. |
 | `/refract:execute-plan-all [target]` | Run every wave through final audit without pausing. |
+| `/refract:debug <symptom>` | Diagnose a bug from runtime evidence before fixing it. |
 
 In Pi, drop the `refract:` prefix, for example `/brainstorm`.
 

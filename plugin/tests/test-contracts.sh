@@ -305,7 +305,7 @@ test "$(wc -l < skills/coordinating-multi-model-work/references/review.md)" -le 
 test "$(wc -l < skills/executing-plans/implementer-prompt.md)" -le 100
 
 v2_tools='project_''resolve|task_''guide|job_''submit|job_''wait|job_''list|job_''cancel|job_''retry|job_''answer|job_''report_error|project_''register|openmcp://'
-policy_skills=(skills/brainstorming skills/verifying-before-completion)
+policy_skills=(skills/brainstorming skills/verifying-before-completion skills/debugging-with-runtime-evidence)
 for dir in "${policy_skills[@]}"; do
     test -d "$dir"
 done
@@ -313,6 +313,8 @@ if grep -R -E "$v2_tools" "${policy_skills[@]}"; then
     printf 'Refract mechanics leaked into a policy skill\n' >&2
     exit 1
 fi
+grep -qF 'refract-debug' skills/debugging-with-runtime-evidence/SKILL.md
+grep -qF 'Keep every probe until the user confirms the fix.' skills/debugging-with-runtime-evidence/SKILL.md
 
 grep -q 'Every executable plan' skills/writing-plans/SKILL.md
 grep -q "Coordinator's plan \`base\` anchor" skills/writing-plans/SKILL.md

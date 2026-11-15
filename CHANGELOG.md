@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Upgraded `coding-agent-cli` from 0.2.1 to 0.2.2. Agy now runs with `--input-format stream-json` and `--print=` as its last argument, and receives the prompt on stdin as a stream-json `user` event instead of as an argument.
+- Added the plugin skill `debugging-with-runtime-evidence` and the `/refract:debug <symptom>` command to find a bug's cause from runtime logs before any fix. `using-refract` routes a bug with a non-evident cause to the skill.
 
 ## 3.0.7 - 2026-11-15
 
