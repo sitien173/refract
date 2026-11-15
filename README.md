@@ -1,4 +1,4 @@
-# Refract 3.0.5
+# Refract 3.0.6
 
 [![tests](https://github.com/sitien173/refract/actions/workflows/server.yml/badge.svg)](https://github.com/sitien173/refract/actions/workflows/server.yml)
 
