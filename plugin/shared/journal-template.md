@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 3.0.7 -->
+<!-- refract-shared-version: 3.0.8 -->
 
 # Phase <N> Journal: <phase title>
 

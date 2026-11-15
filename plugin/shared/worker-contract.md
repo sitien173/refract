@@ -1,4 +1,4 @@
-<!-- refract-shared-version: 3.0.7 -->
+<!-- refract-shared-version: 3.0.8 -->
 # Worker Contract
 
 Execution process for the phase implementer. The phase `prompt.md` lists the
