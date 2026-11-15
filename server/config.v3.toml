@@ -27,7 +27,6 @@ backend = "claude"
 model = "opus"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
@@ -37,7 +36,6 @@ backend = "claude"
 model = "opus"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
@@ -47,7 +45,6 @@ backend = "claude"
 model = "sonnet"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
@@ -57,7 +54,6 @@ backend = "claude"
 model = "sonnet"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
@@ -67,7 +63,6 @@ backend = "claude"
 model = "haiku"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--verbose", "--settings", "{\"enabledPlugins\":{\"refract@refract\":false}}"]
 
@@ -80,7 +75,7 @@ id = "pi-cliproxy/chatgpt-web/gpt-6-luna-think"
 backend = "pi"
 model = "chatgpt-web/gpt-6-luna-think"
 max_concurrency = 3
-context_window = 90000
+system_prompt = "Replace me with an example system prompt."
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -90,7 +85,6 @@ backend = "pi"
 model = "openai-codex/gpt-6-astra"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -100,7 +94,6 @@ backend = "pi"
 model = "openai-codex/gpt-6-astra"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -110,7 +103,6 @@ backend = "pi"
 model = "openai-codex/gpt-6-luna"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -120,7 +112,6 @@ backend = "pi"
 model = "openai-codex/gpt-6.1-sol"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -130,7 +121,6 @@ backend = "pi"
 model = "openai-codex/gpt-6.1-sol"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -140,7 +130,6 @@ backend = "pi"
 model = "openai-codex/gpt-6.1-terra"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -150,7 +139,6 @@ backend = "pi"
 model = "openai-codex/gpt-6.1-terra"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -160,7 +148,6 @@ backend = "pi"
 model = "deepseek/deepseek-v4.1-flash"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 args = ["--no-refract"]
 
@@ -174,8 +161,9 @@ backend = "codex"
 model = "gpt-6-astra"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
-env = { REFRACT_DISABLE = "1" }
+backend_profile = "example"
+retry = { attempts = 2, codes = ["service_error"], patterns = ["temporarily unavailable"] }
+env = { REFRACT_DISABLE = "1", OPENAI_BASE_URL = "https://api.example.invalid/v1" }
 
 [[targets]]
 id = "codex/astra-medium"
@@ -183,7 +171,6 @@ backend = "codex"
 model = "gpt-6-astra"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 [[targets]]
@@ -192,7 +179,6 @@ backend = "codex"
 model = "gpt-6-luna"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 [[targets]]
@@ -201,7 +187,6 @@ backend = "codex"
 model = "gpt-6.1-sol"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 [[targets]]
@@ -210,7 +195,6 @@ backend = "codex"
 model = "gpt-6.1-sol"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 [[targets]]
@@ -219,7 +203,6 @@ backend = "codex"
 model = "gpt-6.1-terra"
 reasoning = "high"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 [[targets]]
@@ -228,7 +211,6 @@ backend = "codex"
 model = "gpt-6.1-terra"
 reasoning = "medium"
 max_concurrency = 3
-context_window = 272000
 env = { REFRACT_DISABLE = "1" }
 
 # ------------------------------- END_CODEX ------------------------------------------
@@ -325,12 +307,12 @@ review = ["codex/terra-high", "cc/claude-opus-medium"]
 extends = "base"
 consult = ["agy-gemini-pro-medium"]
 implement = ["agy-gemini-hydrogen-medium", "agy-gemini-flash-high", "agy-sonnet"]
-review = ["agy-gemini-hydrogen-high"]
+review = "agy-gemini-hydrogen-high"
 
 [profiles."openai"]
 extends = "base"
 consult = ["codex/sol-high", "codex/astra-medium"]
-implement = ["codex/luna-high"]
+implement = { targets = ["codex/luna-high"], timeout_s = 1800 }
 review = ["codex/terra-high"]
 
 [profiles."anthropic"]

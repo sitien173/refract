@@ -282,7 +282,8 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     assert any(isinstance(value, str) for value in workflow_values)
     assert any(isinstance(value, list) for value in workflow_values)
     assert any(isinstance(value, dict) and "timeout_s" in value for value in workflow_values)
-    env_values = [value for target in config.targets for value in target.env.values()]
+    # REFRACT_DISABLE is a non-secret switch; every other env value stays a placeholder.
+    env_values = [value for target in config.targets for key, value in target.env.items() if key != "REFRACT_DISABLE"]
     assert env_values
     assert all("example" in value or "replace-me" in value for value in env_values)
 
