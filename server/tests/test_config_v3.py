@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from tomllib import TOMLDecodeError
 
 import pytest
 
@@ -16,16 +15,12 @@ from refract.config import (
     load_config,
     load_project_config,
     resolve_target_environment,
-    _load_project_config_values,
-    _logging_config,
-    _targets,
 )
-from refract.planning import resolve_execution_plan
+from refract.runner.planning import resolve_execution_plan
 from refract.workflows import get_workflow
-from tests.orchestration_helpers import Raised, outcome, plain
 
 
-_BASE = """[daemon]
+_BASE = """{schema}[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -42,9 +37,14 @@ consult = "primary"
 """
 
 
-def _global(target_extra: str = "", profile_extra: str = "", sections: str = "") -> str:
+def _global(
+    target_extra: str = "",
+    profile_extra: str = "",
+    sections: str = "",
+    schema: str = "schema_version = 1\n\n",
+) -> str:
     return _BASE.format(
-        target_extra=target_extra, profile_extra=profile_extra, sections=sections
+        target_extra=target_extra, profile_extra=profile_extra, sections=sections, schema=schema
     )
 
 
@@ -70,59 +70,58 @@ _POLICY = "retry" "Policy"
 _ENV_SETS = "envs" "_vars"
 _WINDOW = "context" "Window"
 
-# (removed key, replacement hint, layer, global text or project overlay text)
+# (removed key, expected sanitized error, layer, global text or project overlay text)
 _REMOVED = [
-    (f"[{_LF}]", "", "global", _global(sections=f"[{_LF}]\nenabled = true\n")),
-    (f"[daemon].{_HIST}", "", "global", _global().replace(
+    (f"[{_LF}]", "Unsupported config sections", "global", _global(sections=f"[{_LF}]\nenabled = true\n")),
+    (f"[daemon].{_HIST}", "Unsupported daemon settings", "global", _global().replace(
         'default_profile = "balanced"', f'default_profile = "balanced"\n{_HIST} = 8')),
-    (f"[daemon].{_HIST_BYTES}", "", "global", _global().replace(
+    (f"[daemon].{_HIST_BYTES}", "Unsupported daemon settings", "global", _global().replace(
         'default_profile = "balanced"', f'default_profile = "balanced"\n{_HIST_BYTES} = 8')),
-    (f"[{_POLICIES}]", "use targets[].retry", "global",
+    (f"[{_POLICIES}]", "Unsupported config sections", "global",
      _global(sections=f"[{_POLICIES}.fast]\nretry_attempt = 1\n")),
-    ("[envs]", "use targets[].env", "global", _global(sections="[envs.shared]\nA = \"1\"\n")),
-    (f"targets[].{_POLICY}", "use targets[].retry", "global",
+    ("[envs]", "Unsupported config sections", "global", _global(sections="[envs.shared]\nA = \"1\"\n")),
+    ("[telemetry]", "Unsupported config sections", "global", _global(sections="[telemetry]\nenabled = true\n")),
+    (f"targets[].{_POLICY}", "Unsupported target settings", "global",
      _global(target_extra=f'{_POLICY} = "fast"')),
-    (f"targets[].{_ENV_SETS}", "use targets[].env", "global",
+    (f"targets[].{_ENV_SETS}", "Unsupported target settings", "global",
      _global(target_extra=f'{_ENV_SETS} = ["shared"]')),
-    ("targets[].envs", "use targets[].env", "global", _global(target_extra='envs = { A = "1" }')),
-    (f"targets[].{_WINDOW}", "use targets[].context_window", "global",
+    ("targets[].envs", "Unsupported target settings", "global", _global(target_extra='envs = { A = "1" }')),
+    (f"targets[].{_WINDOW}", "Unsupported target settings", "global",
      _global(target_extra=f"{_WINDOW} = 1000")),
-    ("targets[].profile", "use targets[].backend_profile", "global",
+    ("targets[].profile", "Unsupported target settings", "global",
      _global(target_extra='profile = "work"')),
-    ("profiles workflow max_attempts", "use targets[].retry.attempts", "global",
+    ("profiles workflow max_attempts", "Profile workflow has unsupported settings", "global",
      _global().replace('implement = "primary"',
                        'implement = { targets = ["primary"], max_attempts = 2 }')),
-    ("${NAME} in targets[].env", "write the literal value", "global",
+    ("${NAME} in targets[].env", "Environment values cannot contain '${'; write the literal value", "global",
      _global(target_extra='env = { A = "${HOME}" }')),
-    ("[logging].format", "", "global", _global(sections='[logging]\nformat = "json"\n')),
-    ("[logging].console", "", "global", _global(sections="[logging]\nconsole = true\n")),
-    ("[logging].capture_warnings", "", "global",
+    ("[logging].format", "Unsupported logging settings", "global", _global(sections='[logging]\nformat = "json"\n')),
+    ("[logging].console", "Unsupported logging settings", "global", _global(sections="[logging]\nconsole = true\n")),
+    ("[logging].capture_warnings", "Unsupported logging settings", "global",
      _global(sections="[logging]\ncapture_warnings = true\n")),
-    ("[project]", "pass profile on submit", "project", '[project]\ndefault_profile = "balanced"\n'),
-    ("[envs]", "use targets[].env", "project", '[envs.shared]\nA = "1"\n'),
-    (f"targets[].{_ENV_SETS}", "use targets[].env", "project",
+    ("[project]", "Unsupported project config sections", "project", '[project]\ndefault_profile = "balanced"\n'),
+    ("[envs]", "Unsupported project config sections", "project", '[envs.shared]\nA = "1"\n'),
+    (f"targets[].{_ENV_SETS}", "Unsupported project target settings", "project",
      f'[[targets]]\nid = "primary"\n{_ENV_SETS} = ["shared"]\n'),
-    ("targets[].envs", "use targets[].env", "project",
+    ("targets[].envs", "Unsupported project target settings", "project",
      '[[targets]]\nid = "primary"\nenvs = { A = "1" }\n'),
-    ("${NAME} in targets[].env", "write the literal value", "project",
+    ("${NAME} in targets[].env", "Environment values cannot contain '${'; write the literal value", "project",
      '[[targets]]\nid = "primary"\nenv = { A = "${HOME}" }\n'),
 ]
 
 
 @pytest.mark.parametrize(
-    ("key", "hint", "layer", "text"),
+    ("key", "expected", "layer", "text"),
     _REMOVED,
     ids=[f"{layer}:{key}" for key, _, layer, _ in _REMOVED],
 )
-def test_removed_key_fails_load_with_replacement_hint(tmp_path, key, hint, layer, text) -> None:
-    expected = f"{key} has been removed" + (f"; {hint}" if hint else "")
+def test_removed_key_fails_load_with_generic_error(tmp_path, key, expected, layer, text) -> None:
     base = _load_global(tmp_path, _global()) if layer != "global" else None
     with pytest.raises(ValueError) as caught:
         if layer == "global":
             _load_global(tmp_path, text)
         else:
             _load_project(tmp_path, base, text)
-    # The sanitizer must let the exact message through, not a generic error.
     assert re.search(re.escape(expected) + r"$", str(caught.value)), str(caught.value)
 
 
@@ -144,12 +143,12 @@ def test_target_config_has_exact_v3_fields() -> None:
 
 def test_inline_retry_context_window_and_literal_env_load(tmp_path) -> None:
     catalog = _load_global(tmp_path, _global(target_extra="""context_window = 200000
-retry = { attempts = 2, codes = ["rate_limit"], patterns = ["overloaded"] }
+retry = { attempts = 2, codes = ["service_error"], patterns = ["overloaded"] }
 env = { API_URL = "https://example.invalid", MODE = "$literal" }"""))
 
     target = catalog.targets[0]
     assert target.context_window == 200000
-    assert target.retry == RetryPolicy(attempts=2, codes=("rate_limit",), patterns=("overloaded",))
+    assert target.retry == RetryPolicy(attempts=2, codes=("service_error",), patterns=("overloaded",))
     assert target.env == {"API_URL": "https://example.invalid", "MODE": "$literal"}
     assert resolve_target_environment(catalog, target) == target.env
 
@@ -165,6 +164,12 @@ def test_empty_inline_retry_table_means_no_retry(tmp_path) -> None:
     assert target.retry == RetryPolicy(attempts=0, codes=(), patterns=())
 
 
+@pytest.mark.parametrize("codes", ["[123]", '[""]', '["no_agent_messages"]'])
+def test_non_code_retry_entries_are_unknown_codes(tmp_path, codes) -> None:
+    with pytest.raises(ValueError, match=r"Unknown retry code"):
+        _load_global(tmp_path, _global(target_extra=f"retry = {{ codes = {codes} }}"))
+
+
 @pytest.mark.parametrize(
     "retry",
     [
@@ -173,9 +178,7 @@ def test_empty_inline_retry_table_means_no_retry(tmp_path) -> None:
         "{ attempts = false }",
         "{ attempts = 1.5 }",
         '{ attempts = "2" }',
-        '{ codes = "rate_limit" }',
-        "{ codes = [123] }",
-        '{ codes = [""] }',
+        '{ codes = "service_error" }',
         '{ patterns = "temporarily unavailable" }',
         "{ patterns = [1] }",
         "{ patterns = [false] }",
@@ -236,30 +239,12 @@ def test_project_overlay_rejects_global_telemetry(tmp_path) -> None:
         _load_project(tmp_path, base, "[telemetry]\nenabled = true\n")
 
 
-def test_telemetry_endpoint_is_ignored_and_recorded(tmp_path) -> None:
-    config = _load_global(tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n')
-    assert config.ignored_keys == ("telemetry.endpoint",)
-
-
-def test_missing_telemetry_endpoint_has_no_ignored_keys(tmp_path) -> None:
-    config = _load_global(tmp_path, _global())
-    assert config.ignored_keys == ()
-
-
-def test_leftover_pricing_section_loads_and_is_reported_as_ignored(tmp_path) -> None:
-    config = _load_global(
-        tmp_path,
-        _global() + '\n[pricing]\ncurrency = "EUR"\n[pricing.models.m]\ninput = "bad"\n',
-    )
-    assert config.ignored_keys == ("pricing",)
-    assert not hasattr(config, "pricing")
-
-
-def test_leftover_pricing_and_telemetry_endpoint_are_both_ignored(tmp_path) -> None:
-    config = _load_global(
-        tmp_path, _global() + '\n[telemetry]\nendpoint = "x"\n[pricing]\ncurrency = "USD"\n',
-    )
-    assert config.ignored_keys == ("telemetry.endpoint", "pricing")
+def test_global_config_rejects_pricing_section(tmp_path) -> None:
+    with pytest.raises(ValueError, match=r"Unsupported config sections"):
+        _load_global(
+            tmp_path,
+            _global() + '\n[pricing]\ncurrency = "EUR"\n[pricing.models.m]\ninput = "bad"\n',
+        )
 
 
 def test_project_overlay_rejects_global_pricing(tmp_path) -> None:
@@ -272,7 +257,7 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     import tomllib
     from pathlib import Path
 
-    from refract.config import _TARGET_KEYS
+    from refract.config.models import TargetFile
 
     monkeypatch.setenv("REFRACT_HOME", str(tmp_path))
     path = Path(__file__).resolve().parents[1] / "config.v3.toml"
@@ -280,16 +265,16 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
 
     assert {target.backend for target in config.targets} == {"agy", "codex", "pi", "claude"}
-    assert set().union(*(set(item) for item in raw["targets"])) == _TARGET_KEYS
+    assert set().union(*(set(item) for item in raw["targets"])) == set(TargetFile.model_fields)
     assert set(raw["daemon"]) == {
         "host", "port", "max_jobs", "default_profile", "breaker_failure_threshold",
         "breaker_base_cooldown_s", "breaker_max_cooldown_s", "ask_timeout_s",
     }
     assert set(raw["logging"]) == {"level", "file", "max_bytes", "backup_count"}
     assert set(raw["notifications"]) == {"enabled"}
-    assert set(raw["telemetry"]) == {"enabled"}
-    assert config.telemetry.enabled is False
-    assert config.ignored_keys == ()
+    assert "telemetry" not in raw
+    assert not hasattr(config, "telemetry")
+    assert not hasattr(config, "ignored_keys")
     assert "pricing" not in raw
     assert not hasattr(config, "pricing")
     profiles = raw["profiles"].values()
@@ -305,699 +290,233 @@ def test_example_v3_config_loads_and_covers_every_key(tmp_path, monkeypatch) -> 
     assert all("example" in value or "replace-me" in value for value in env_values)
 
 
-# Characterization of private config helpers. Expected values were recorded from
-# the implementation before the complexity refactor; every case pins the result
-# or the exact error text, and the "*_before_*" cases pin which error wins.
-
-_TARGETS_CASES = {
-    "dict_empty": ({}, Raised(ValueError, "[targets] must contain at least one target")),
-    "dict_nonempty": ({"a": 1}, Raised(ValueError, "[targets] must be a TOML array of tables")),
-    "str": ("x", Raised(ValueError, "[targets] must be a TOML array of tables")),
-    "none": (None, Raised(ValueError, "[targets] must be a TOML array of tables")),
-    "tuple": ((), Raised(ValueError, "[targets] must be a TOML array of tables")),
-    "list_empty": ([], Raised(ValueError, "[targets] must contain at least one target")),
-    "item_not_dict": (["x"], Raised(ValueError, "Each target must be a TOML table")),
-    "item_none": ([None], Raised(ValueError, "Each target must be a TOML table")),
-    "missing_id": ([{"backend": "codex"}], Raised(ValueError, "Invalid target declaration")),
-    "blank_id": ([{"id": "  ", "backend": "codex"}], Raised(ValueError, "Invalid target declaration")),
-    "int_id": ([{"id": 5, "backend": "codex"}], Raised(ValueError, "Invalid target declaration")),
-    "missing_backend": ([{"id": "t"}], Raised(ValueError, "Invalid target declaration")),
-    "bad_backend": ([{"id": "t", "backend": "nope"}], Raised(ValueError, "Invalid target declaration")),
-    "int_backend": ([{"id": "t", "backend": 1}], Raised(ValueError, "Invalid target declaration")),
-    "padded_ok": ([{"id": " t ", "backend": " pi "}], [TargetConfig("t", "pi")]),
-    "all_backends": (
-        [
-            {"id": "a", "backend": "agy"},
-            {"id": "b", "backend": "codex"},
-            {"id": "c", "backend": "pi"},
-            {"id": "d", "backend": "claude"},
-        ],
-        [
-            TargetConfig("a", "agy"),
-            TargetConfig("b", "codex"),
-            TargetConfig("c", "pi"),
-            TargetConfig("d", "claude"),
-        ],
-    ),
-    "removed_key": (
-        [{"id": "t", "backend": "codex", "profile": "x"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
-    ),
-    "removed_key_envs": (
-        [{"id": "t", "backend": "codex", "envs": {}}],
-        Raised(ValueError, "targets[].envs has been removed; use targets[].env"),
-    ),
-    "unknown_key": (
-        [{"id": "t", "backend": "codex", "zzz": 1, "yyy": 2}],
-        Raised(ValueError, "Unsupported target settings: ['yyy', 'zzz']"),
-    ),
-    "removed_before_unknown": (
-        [{"id": "t", "backend": "codex", "zzz": 1, "profile": "x"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
-    ),
-    "args_not_list": (
-        [{"id": "t", "backend": "codex", "args": "--x"}],
-        Raised(ValueError, "Target 't' args must be a list of strings"),
-    ),
-    "args_nonstring": (
-        [{"id": "t", "backend": "codex", "args": ["--x", 1]}],
-        Raised(ValueError, "Target 't' args must be a list of strings"),
-    ),
-    "args_ok": (
-        [{"id": "t", "backend": "codex", "args": ["--x", "y"]}],
-        [TargetConfig("t", "codex", args=("--x", "y"))],
-    ),
-    "isolated_removed": (
-        [{"id": "t", "backend": "pi", "isolated": True}],
-        Raised(ValueError, "targets[].isolated has been removed; use targets[].args"),
-    ),
-    "read_only_removed": (
-        [{"id": "t", "backend": "pi", "read_only": True}],
-        Raised(ValueError, "targets[].read_only has been removed; use targets[].args"),
-    ),
-    "model_int": (
-        [{"id": "t", "backend": "codex", "model": 1}],
-        Raised(ValueError, "Target 't' settings must be strings: ['model']"),
-    ),
-    "reasoning_int": (
-        [{"id": "t", "backend": "codex", "reasoning": 2}],
-        Raised(ValueError, "Target 't' settings must be strings: ['reasoning']"),
-    ),
-    "system_prompt_int": (
-        [{"id": "t", "backend": "codex", "system_prompt": 3}],
-        Raised(ValueError, "Target 't' settings must be strings: ['system_prompt']"),
-    ),
-    "two_text_bad": (
-        [{"id": "t", "backend": "codex", "model": 1, "system_prompt": 3}],
-        Raised(ValueError, "Target 't' settings must be strings: ['model', 'system_prompt']"),
-    ),
-    "text_ok": (
-        [{"id": "t", "backend": "codex", "model": "m", "reasoning": "r", "system_prompt": "s"}],
-        [TargetConfig("t", "codex", model="m", reasoning="r", system_prompt="s")],
-    ),
-    "backend_profile_int": (
-        [{"id": "t", "backend": "codex", "backend_profile": 3}],
-        Raised(ValueError, "Target 't' backend_profile must be a string"),
-    ),
-    "backend_profile_ok": (
-        [{"id": "t", "backend": "codex", "backend_profile": "bp"}],
-        [TargetConfig("t", "codex", backend_profile="bp")],
-    ),
-    "backend_profile_none": (
-        [{"id": "t", "backend": "codex", "backend_profile": None}],
-        [TargetConfig("t", "codex")],
-    ),
-    "codex_cd": (
-        [{"id": "t", "backend": "codex", "args": ["--cd", "/x"]}],
-        Raised(ValueError, "Codex target 't' args cannot override the workspace root"),
-    ),
-    "pi_ext": (
-        [{"id": "t", "backend": "pi", "args": ["-e", "x"]}],
-        [TargetConfig("t", "pi", args=("-e", "x"))],
-    ),
-    "dashdash": (
-        [{"id": "t", "backend": "codex", "args": ["--"]}],
-        Raised(ValueError, "Target 't' args cannot contain the reserved '--' token"),
-    ),
-    "nul_arg": (
-        [{"id": "t", "backend": "codex", "args": ["a\x00"]}],
-        Raised(ValueError, "Target 't' args cannot contain NUL bytes"),
-    ),
-    "max_concurrency_ok": (
-        [{"id": "t", "backend": "codex", "max_concurrency": 3}],
-        [TargetConfig("t", "codex", max_concurrency=3)],
-    ),
-    "max_concurrency_zero": (
-        [{"id": "t", "backend": "codex", "max_concurrency": 0}],
-        Raised(ValueError, "Target 't' max_concurrency must be a positive integer"),
-    ),
-    "context_window_ok": (
-        [{"id": "t", "backend": "codex", "context_window": 1000}],
-        [TargetConfig("t", "codex", context_window=1000)],
-    ),
-    "context_window_zero": (
-        [{"id": "t", "backend": "codex", "context_window": 0}],
-        Raised(ValueError, "Target 't' context_window must be a positive integer"),
-    ),
-    "retry_ok": (
-        [{"id": "t", "backend": "codex", "retry": {"attempts": 2, "codes": ["x"], "patterns": ["y"]}}],
-        [TargetConfig("t", "codex", retry=RetryPolicy(2, ("x",), ("y",)))],
-    ),
-    "retry_bad": (
-        [{"id": "t", "backend": "codex", "retry": []}],
-        Raised(ValueError, "Target 't' has invalid retry settings"),
-    ),
-    "env_ok": (
-        [{"id": "t", "backend": "codex", "env": {"A": "1"}}],
-        [TargetConfig("t", "codex", env={"A": "1"})],
-    ),
-    "env_bad_type": (
-        [{"id": "t", "backend": "codex", "env": []}],
-        Raised(ValueError, "Target 't' env must be a TOML table"),
-    ),
-    "env_bad_key": (
-        [{"id": "t", "backend": "codex", "env": {"": "x"}}],
-        Raised(ValueError, "Environment key cannot be empty in Target 't' env"),
-    ),
-    "dup_ids": (
-        [{"id": "a", "backend": "codex"}, {"id": "a", "backend": "pi"}],
-        Raised(ValueError, "Target identifiers must be unique"),
-    ),
-    "text_before_backend_profile": (
-        [{"id": "t", "backend": "codex", "model": 1, "backend_profile": 2}],
-        Raised(ValueError, "Target 't' settings must be strings: ['model']"),
-    ),
-    "backend_profile_before_validate": (
-        [{"id": "t", "backend": "codex", "backend_profile": 2, "args": ["--"]}],
-        Raised(ValueError, "Target 't' backend_profile must be a string"),
-    ),
-    "validate_before_max_concurrency": (
-        [{"id": "t", "backend": "codex", "args": ["--"], "max_concurrency": 0}],
-        Raised(ValueError, "Target 't' args cannot contain the reserved '--' token"),
-    ),
-    "max_concurrency_before_context_window": (
-        [{"id": "t", "backend": "codex", "max_concurrency": 0, "context_window": 0}],
-        Raised(ValueError, "Target 't' max_concurrency must be a positive integer"),
-    ),
-    "context_window_before_retry": (
-        [{"id": "t", "backend": "codex", "context_window": 0, "retry": []}],
-        Raised(ValueError, "Target 't' context_window must be a positive integer"),
-    ),
-    "retry_before_env": (
-        [{"id": "t", "backend": "codex", "retry": [], "env": []}],
-        Raised(ValueError, "Target 't' has invalid retry settings"),
-    ),
-    "invalid_decl_before_removed": (
-        [{"id": "", "backend": "codex", "profile": "x"}],
-        Raised(ValueError, "Invalid target declaration"),
-    ),
-    "removed_before_args": (
-        [{"id": "t", "backend": "codex", "profile": "x", "args": "y"}],
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
-    ),
-    "unknown_before_args": (
-        [{"id": "t", "backend": "codex", "zzz": 1, "args": "y"}],
-        Raised(ValueError, "Unsupported target settings: ['zzz']"),
-    ),
-    "second_item_error_before_dup": (
-        [{"id": "a", "backend": "codex"}, {"id": "a", "backend": "codex", "model": 1}],
-        Raised(ValueError, "Target 'a' settings must be strings: ['model']"),
-    ),
-    "first_item_error_wins": (
-        [{"id": "t", "backend": "codex", "model": 1}, {"id": "t", "backend": "nope"}],
-        Raised(ValueError, "Target 't' settings must be strings: ['model']"),
-    ),
-    "second_item_bad": (
-        [{"id": "a", "backend": "codex"}, "x"],
-        Raised(ValueError, "Each target must be a TOML table"),
-    ),
-}
+def test_load_project_config_without_file_returns_base(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    assert load_project_config(tmp_path / "noproject", base) is base
 
 
-@pytest.mark.parametrize("case", list(_TARGETS_CASES))
-def test_targets_characterization(case) -> None:
-    raw, expected = _TARGETS_CASES[case]
-    assert outcome(lambda: list(_targets(raw))) == plain(expected)
+def test_load_config_rejects_env_expansion_with_direct_message(tmp_path) -> None:
+    text = _global(target_extra='env = { TOKEN = "${HOME}" }')
+    with pytest.raises(ValueError, match=r"\$\{"):
+        _load_global(tmp_path, text)
 
 
-_LOGGING_CASES = {
-    "none": (None, ("INFO", "refract.log", 10485760, 5)),
-    "empty": ({}, ("INFO", "refract.log", 10485760, 5)),
-    "not_dict": ([], Raised(ValueError, "[logging] must be a TOML table")),
-    "str": ("x", Raised(ValueError, "[logging] must be a TOML table")),
-    "removed_format": ({"format": "json"}, Raised(ValueError, "[logging].format has been removed")),
-    "removed_console": ({"console": True}, Raised(ValueError, "[logging].console has been removed")),
-    "removed_capture": (
-        {"capture_warnings": 1},
-        Raised(ValueError, "[logging].capture_warnings has been removed"),
-    ),
-    "unknown": ({"zzz": 1, "yyy": 2}, Raised(ValueError, "Unsupported logging settings: ['yyy', 'zzz']")),
-    "removed_before_unknown": (
-        {"zzz": 1, "format": 1},
-        Raised(ValueError, "[logging].format has been removed"),
-    ),
-    "level_lower": ({"level": " debug "}, ("DEBUG", "refract.log", 10485760, 5)),
-    "level_invalid": ({"level": "loud"}, Raised(ValueError, "Invalid logging level: 'LOUD'")),
-    "level_int": ({"level": 5}, Raised(ValueError, "Invalid logging level: '5'")),
-    "level_each": ({"level": "critical"}, ("CRITICAL", "refract.log", 10485760, 5)),
-    "file_none": ({"file": None}, ("INFO", None, 10485760, 5)),
-    "file_false": ({"file": False}, ("INFO", None, 10485760, 5)),
-    "file_empty": ({"file": ""}, ("INFO", None, 10485760, 5)),
-    "file_blank": ({"file": "  "}, ("INFO", None, 10485760, 5)),
-    "file_none_str": ({"file": "None"}, ("INFO", None, 10485760, 5)),
-    "file_off": ({"file": "OFF"}, ("INFO", None, 10485760, 5)),
-    "file_int": ({"file": 5}, Raised(ValueError, "logging.file must be a path string or false")),
-    "file_true": ({"file": True}, Raised(ValueError, "logging.file must be a path string or false")),
-    "file_list": ({"file": ["x"]}, Raised(ValueError, "logging.file must be a path string or false")),
-    "file_relative": ({"file": "logs/x.log"}, ("INFO", "logs/x.log", 10485760, 5)),
-    "file_absolute": ({"file": "ABS"}, ("INFO", "<ABS>", 10485760, 5)),
-    "file_default": ({}, ("INFO", "refract.log", 10485760, 5)),
-    "level_before_file": ({"level": "bad", "file": 5}, Raised(ValueError, "Invalid logging level: 'BAD'")),
-    "file_before_retention": (
-        {"file": 5, "max_bytes": "x"},
-        Raised(ValueError, "logging.file must be a path string or false"),
-    ),
-    "unknown_before_level": (
-        {"zzz": 1, "level": "bad"},
-        Raised(ValueError, "Unsupported logging settings: ['zzz']"),
-    ),
-    "max_bytes_str_num": ({"max_bytes": "5"}, ("INFO", "refract.log", 5, 5)),
-    "max_bytes_float": ({"max_bytes": 1.9}, ("INFO", "refract.log", 1, 5)),
-    "max_bytes_text": (
-        {"max_bytes": "abc"},
-        Raised(ValueError, "Logging retention settings must be integers"),
-    ),
-    "max_bytes_none": (
-        {"max_bytes": None},
-        Raised(ValueError, "Logging retention settings must be integers"),
-    ),
-    "max_bytes_bool": ({"max_bytes": True}, Raised(ValueError, "logging.max_bytes must be at least 1")),
-    "max_bytes_zero": ({"max_bytes": 0}, Raised(ValueError, "logging.max_bytes must be at least 1")),
-    "max_bytes_neg": ({"max_bytes": -5}, Raised(ValueError, "logging.max_bytes must be at least 1")),
-    "backup_zero": ({"backup_count": 0}, ("INFO", "refract.log", 10485760, 0)),
-    "backup_bool": ({"backup_count": True}, Raised(ValueError, "logging.backup_count must be at least 0")),
-    "backup_neg": ({"backup_count": -1}, Raised(ValueError, "logging.backup_count must be at least 0")),
-    "backup_text": ({"backup_count": "x"}, Raised(ValueError, "Logging retention settings must be integers")),
-    "backup_none": (
-        {"backup_count": None},
-        Raised(ValueError, "Logging retention settings must be integers"),
-    ),
-    "backup_float": ({"backup_count": 2.7}, ("INFO", "refract.log", 10485760, 2)),
-    "int_error_before_range": (
-        {"max_bytes": 0, "backup_count": "x"},
-        Raised(ValueError, "Logging retention settings must be integers"),
-    ),
-    "max_range_before_backup_range": (
-        {"max_bytes": 0, "backup_count": -1},
-        Raised(ValueError, "logging.max_bytes must be at least 1"),
-    ),
-    "max_bool_before_backup_bool": (
-        {"max_bytes": True, "backup_count": True},
-        Raised(ValueError, "logging.max_bytes must be at least 1"),
-    ),
-    "backup_bool_after_max_ok": (
-        {"max_bytes": 7, "backup_count": False},
-        Raised(ValueError, "logging.backup_count must be at least 0"),
-    ),
-    "all_set": (
-        {"level": "WARNING", "file": "x.log", "max_bytes": 10, "backup_count": 2},
-        ("WARNING", "x.log", 10, 2),
-    ),
-}
+# Pydantic loader contract: schema_version, unknown keys, and error code and loc.
+
+def _issues(caught) -> list[tuple[str, tuple[str | int, ...]]]:
+    return [(issue.code, issue.loc) for issue in caught.value.issues]
 
 
-@pytest.mark.parametrize("case", list(_LOGGING_CASES))
-def test_logging_config_characterization(tmp_path, case) -> None:
-    raw, expected = _LOGGING_CASES[case]
-    absolute = tmp_path / "abs.log"
-    if isinstance(raw, dict) and raw.get("file") == "ABS":
-        raw = {**raw, "file": str(absolute)}
-
-    def call():
-        config = _logging_config(raw, tmp_path)
-        if config.file is None:
-            shown = None
-        elif config.file == absolute:
-            shown = "<ABS>"
-        else:
-            shown = config.file.relative_to(tmp_path).as_posix()
-        return (config.level, shown, config.max_bytes, config.backup_count)
-
-    assert outcome(call) == plain(expected)
+def test_schema_version_loads(tmp_path) -> None:
+    assert _load_global(tmp_path, _global()).default_profile == "balanced"
 
 
-_PROJECT_BASE = """[daemon]
-default_profile = "balanced"
-
-[[targets]]
-id = "primary"
-backend = "codex"
-env = { KEEP = "1", OVER = "base" }
-
-[[targets]]
-id = "second"
-backend = "pi"
-
-[profiles.balanced]
-implement = "primary"
-review = "second"
-consult = "primary"
-
-[profiles.other]
-extends = "balanced"
-review = "primary"
-"""
-
-_PRIMARY = TargetConfig("primary", "codex", env={"KEEP": "1", "OVER": "base"})
-_SECOND = TargetConfig("second", "pi")
-_BASE_PROFILES = {
-    "balanced": {
-        "implement": TargetSelection(("primary",)),
-        "review": TargetSelection(("second",)),
-        "consult": TargetSelection(("primary",)),
-    },
-    "other": {
-        "implement": TargetSelection(("primary",)),
-        "review": TargetSelection(("primary",)),
-        "consult": TargetSelection(("primary",)),
-    },
-}
-_BASE_DECLARATIONS = {
-    "balanced": ProfileDeclaration(
-        None,
-        {
-            "implement": TargetSelection(("primary",)),
-            "review": TargetSelection(("second",)),
-            "consult": TargetSelection(("primary",)),
-        },
-    ),
-    "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-}
+def test_missing_schema_version_reports_code_loc_and_fix(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, _global(schema=""))
+    assert _issues(caught) == [("missing", ("schema_version",))]
+    assert "schema_version = 1" in caught.value.issues[0].hint
 
 
-@dataclasses.dataclass(frozen=True)
-class _Loaded:
-    targets: list[TargetConfig]
-    profiles: dict
-    declarations: dict
-    profiles_unchanged: bool
-    declarations_unchanged: bool
+def test_wrong_schema_version_reports_literal_error(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, _global(schema="schema_version = 2\n\n"))
+    assert _issues(caught) == [("literal_error", ("schema_version",))]
 
 
-_PROJECT_CASES = {
-    "empty": (b"", _Loaded([_PRIMARY, _SECOND], _BASE_PROFILES, _BASE_DECLARATIONS, True, True)),
-    "invalid_toml": (
-        b"[[[x",
-        Raised(TOMLDecodeError, "Invalid initial character for a key part (at line 1, column 3)"),
-    ),
-    "bad_utf8": (
-        b"\xff\xfe",
-        Raised(UnicodeDecodeError, "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"),
-    ),
-    "removed_section": (
-        b"[project]\nx = 1\n",
-        Raised(ValueError, "[project] has been removed; pass profile on submit"),
-    ),
-    "removed_langfuse": (b"[langfuse]\nx = 1\n", Raised(ValueError, "[langfuse] has been removed")),
-    "unsupported_section": (
-        b"[daemon]\nport = 1\n",
-        Raised(ValueError, "Unsupported project config sections: ['daemon']"),
-    ),
-    "removed_section_before_unsupported": (
-        b"[daemon]\nport = 1\n\n[project]\nx = 1\n",
-        Raised(ValueError, "[project] has been removed; pass profile on submit"),
-    ),
-    "targets_not_list": (b"targets = 1\n", Raised(ValueError, "[targets] must be a TOML array of tables")),
-    "targets_table": (
-        b'[targets]\nid = "primary"\n',
-        Raised(ValueError, "[targets] must be a TOML array of tables"),
-    ),
-    "item_not_dict": (b"targets = [1]\n", Raised(ValueError, "Each target must be a TOML table")),
-    "unknown_target": (
-        b'[[targets]]\nid = "new"\n',
-        Raised(ValueError, "Project config cannot add targets: 'new'"),
-    ),
-    "missing_id": (b"[[targets]]\nenv = {}\n", Raised(ValueError, "Project config cannot add targets: ''")),
-    "blank_id": (b'[[targets]]\nid = "  "\n', Raised(ValueError, "Project config cannot add targets: ''")),
-    "int_id": (b"[[targets]]\nid = 3\n", Raised(ValueError, "Project config cannot add targets: ''")),
-    "duplicate": (
-        b'[[targets]]\nid = "primary"\n[[targets]]\nid = "primary"\n',
-        Raised(ValueError, "Duplicate project target override: 'primary'"),
-    ),
-    "removed_key": (
-        b'[[targets]]\nid = "primary"\nprofile = "x"\n',
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
-    ),
-    "unsupported_field": (
-        b'[[targets]]\nid = "primary"\nmodel = "x"\nbackend = "pi"\n',
-        Raised(ValueError, "Unsupported project target settings: ['backend', 'model']"),
-    ),
-    "removed_before_unsupported": (
-        b'[[targets]]\nid = "primary"\nmodel = "x"\nprofile = "x"\n',
-        Raised(ValueError, "targets[].profile has been removed; use targets[].backend_profile"),
-    ),
-    "env_merge": (
-        b'[[targets]]\nid = "primary"\nenv = { OVER = "proj", NEW = "2" }\n',
-        _Loaded(
-            [TargetConfig("primary", "codex", env={"KEEP": "1", "OVER": "proj", "NEW": "2"}), _SECOND],
-            _BASE_PROFILES,
-            _BASE_DECLARATIONS,
-            True,
-            True,
-        ),
-    ),
-    "env_none": (
-        b'[[targets]]\nid = "second"\n',
-        _Loaded([_PRIMARY, _SECOND], _BASE_PROFILES, _BASE_DECLARATIONS, True, True),
-    ),
-    "env_override_second": (
-        b'[[targets]]\nid = " second "\nenv = { Z = "z" }\n',
-        _Loaded(
-            [_PRIMARY, TargetConfig("second", "pi", env={"Z": "z"})],
-            _BASE_PROFILES,
-            _BASE_DECLARATIONS,
-            True,
-            True,
-        ),
-    ),
-    "env_bad_type": (
-        b'[[targets]]\nid = "primary"\nenv = 3\n',
-        Raised(ValueError, "Target 'primary' env must be a TOML table"),
-    ),
-    "env_bad_key": (
-        b'[[targets]]\nid = "primary"\nenv = { "A=B" = "x" }\n',
-        Raised(ValueError, "Environment key cannot contain '=' in Target 'primary' env"),
-    ),
-    "env_template": (
-        b'[[targets]]\nid = "primary"\nenv = { A = "${HOME}" }\n',
-        Raised(ValueError, "${NAME} in targets[].env has been removed; write the literal value"),
-    ),
-    "empty_targets": (
-        b"targets = []\n",
-        _Loaded([_PRIMARY, _SECOND], _BASE_PROFILES, _BASE_DECLARATIONS, True, True),
-    ),
-    "profiles_only": (
-        b'[profiles.extra]\nimplement = "primary"\n',
-        _Loaded(
-            [_PRIMARY, _SECOND],
-            {
-                "balanced": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("second",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "other": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "extra": {"implement": TargetSelection(("primary",))},
-            },
-            {
-                "balanced": ProfileDeclaration(
-                    None,
-                    {
-                        "implement": TargetSelection(("primary",)),
-                        "review": TargetSelection(("second",)),
-                        "consult": TargetSelection(("primary",)),
-                    },
-                ),
-                "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-                "extra": ProfileDeclaration(None, {"implement": TargetSelection(("primary",))}),
-            },
-            False,
-            False,
-        ),
-    ),
-    "profiles_extends_base": (
-        b'[profiles.extra]\nextends = "balanced"\nreview = "primary"\n',
-        _Loaded(
-            [_PRIMARY, _SECOND],
-            {
-                "balanced": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("second",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "other": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "extra": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-            },
-            {
-                "balanced": ProfileDeclaration(
-                    None,
-                    {
-                        "implement": TargetSelection(("primary",)),
-                        "review": TargetSelection(("second",)),
-                        "consult": TargetSelection(("primary",)),
-                    },
-                ),
-                "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-                "extra": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-            },
-            False,
-            False,
-        ),
-    ),
-    "profiles_extends_self": (
-        b'[profiles.balanced]\nextends = "balanced"\nreview = "primary"\n',
-        _Loaded(
-            [_PRIMARY, _SECOND],
-            {
-                "balanced": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "other": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-            },
-            {
-                "balanced": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-                "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-            },
-            False,
-            False,
-        ),
-    ),
-    "profiles_self_unknown": (
-        b'[profiles.fresh]\nextends = "fresh"\n',
-        Raised(ValueError, "Profile 'fresh' extends unknown parent 'fresh'"),
-    ),
-    "profiles_unknown_parent": (
-        b'[profiles.extra]\nextends = "nope"\n',
-        Raised(ValueError, "Profile 'extra' extends unknown parent 'nope'"),
-    ),
-    "profiles_cycle": (
-        b'[profiles.a]\nextends = "b"\n[profiles.b]\nextends = "a"\n',
-        Raised(ValueError, "Profile inheritance cycle: a -> b -> a"),
-    ),
-    "profiles_replace_existing": (
-        b'[profiles.balanced]\nimplement = "second"\nreview = "second"\nconsult = "second"\n',
-        _Loaded(
-            [_PRIMARY, _SECOND],
-            {
-                "balanced": {
-                    "implement": TargetSelection(("second",)),
-                    "review": TargetSelection(("second",)),
-                    "consult": TargetSelection(("second",)),
-                },
-                "other": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-            },
-            {
-                "balanced": ProfileDeclaration(
-                    None,
-                    {
-                        "implement": TargetSelection(("second",)),
-                        "review": TargetSelection(("second",)),
-                        "consult": TargetSelection(("second",)),
-                    },
-                ),
-                "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-            },
-            False,
-            False,
-        ),
-    ),
-    "profiles_bad": (b"profiles = 1\n", Raised(ValueError, "[profiles] must contain at least one profile")),
-    "profiles_empty": (b"[profiles]\n", Raised(ValueError, "[profiles] must contain at least one profile")),
-    "profiles_unknown_target": (
-        b'[profiles.x]\nimplement = "ghost"\n',
-        Raised(ValueError, "Profile 'x' workflow 'implement' has invalid targets: ['ghost']"),
-    ),
-    "profiles_unknown_workflow": (
-        b'[profiles.x]\nbogus = "primary"\n',
-        Raised(
-            ValueError,
-            "Unknown workflow 'bogus'; expected one of ('consult', 'implement', 'other', 'review')",
-        ),
-    ),
-    "both": (
-        b'[[targets]]\nid = "primary"\nenv = { N = "1" }\n[profiles.extra]\nextends = "balanced"\nconsult = "second"\n',
-        _Loaded(
-            [TargetConfig("primary", "codex", env={"KEEP": "1", "OVER": "base", "N": "1"}), _SECOND],
-            {
-                "balanced": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("second",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "other": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("primary",)),
-                    "consult": TargetSelection(("primary",)),
-                },
-                "extra": {
-                    "implement": TargetSelection(("primary",)),
-                    "review": TargetSelection(("second",)),
-                    "consult": TargetSelection(("second",)),
-                },
-            },
-            {
-                "balanced": ProfileDeclaration(
-                    None,
-                    {
-                        "implement": TargetSelection(("primary",)),
-                        "review": TargetSelection(("second",)),
-                        "consult": TargetSelection(("primary",)),
-                    },
-                ),
-                "other": ProfileDeclaration("balanced", {"review": TargetSelection(("primary",))}),
-                "extra": ProfileDeclaration("balanced", {"consult": TargetSelection(("second",))}),
-            },
-            False,
-            False,
-        ),
-    ),
-    "target_error_before_profile_error": (
-        b'[[targets]]\nid = "ghost"\n[profiles]\n',
-        Raised(ValueError, "Project config cannot add targets: 'ghost'"),
-    ),
-    "unsupported_before_target_error": (
-        b'[daemon]\nx = 1\n[[targets]]\nid = "ghost"\n',
-        Raised(ValueError, "Unsupported project config sections: ['daemon']"),
-    ),
-}
+def test_unknown_top_level_key_reports_extra_forbidden_at_key(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, _global(sections='[unknown_section]\nfoo = "bar"\n'))
+    assert _issues(caught) == [("extra_forbidden", ("unknown_section",))]
 
 
-@pytest.mark.parametrize("case", list(_PROJECT_CASES))
-def test_load_project_config_values_characterization(tmp_path, case) -> None:
-    data, expected = _PROJECT_CASES[case]
-    path = tmp_path / "config.toml"
-    path.write_text(_PROJECT_BASE, encoding="utf-8")
-    base = load_config(path)
-
-    def call():
-        loaded = _load_project_config_values(tmp_path / "noproject", base, data)
-        if loaded is base:
-            return "BASE"
-        return _Loaded(
-            list(loaded.targets),
-            loaded.profiles,
-            loaded.profile_declarations,
-            loaded.profiles == base.profiles,
-            loaded.profile_declarations == base.profile_declarations,
-        )
-
-    assert outcome(call) == plain(expected)
+def test_unknown_retry_code_reports_exact_loc(tmp_path) -> None:
+    text = _global(target_extra='retry = { attempts = 1, codes = ["service_error", "nope"] }')
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, text)
+    assert _issues(caught) == [("literal_error", ("targets", 0, "retry", "codes", 1))]
 
 
-def test_load_project_config_values_without_file_returns_base(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    path.write_text(_PROJECT_BASE, encoding="utf-8")
-    base = load_config(path)
-    assert _load_project_config_values(tmp_path / "noproject", base, None) is base
+def test_every_documented_retry_code_loads(tmp_path) -> None:
+    codes = [
+        "timeout", "service_error", "execution_error", "stdin_failed", "no_output",
+        "context_overflow", "bad_cwd", "invalid_prompt", "invalid_args",
+        "unsupported_option", "invalid_model", "missing_cli", "spawn_failed", "auth",
+    ]
+    text = _global(target_extra=f"retry = {{ attempts = 1, codes = {codes!r} }}".replace("'", '"'))
+    assert _load_global(tmp_path, text).targets[0].retry.codes == tuple(codes)
+
+
+def test_project_overlay_error_carries_code_and_loc(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    with pytest.raises(ValueError) as caught:
+        _load_project(tmp_path, base, "[project]\nx = 1\n")
+    assert _issues(caught) == [("extra_forbidden", ("project",))]
+
+
+def test_toml_syntax_error_carries_code_and_empty_loc(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, "schema_version = \n")
+    assert _issues(caught) == [("toml_syntax", ())]
+
+
+@pytest.mark.parametrize("sentinel", ["false", "", "none", "None", "OFF", "-", "  "])
+def test_logging_file_sentinels_disable_file_logging(tmp_path, sentinel) -> None:
+    config = _load_global(tmp_path, _global(sections=f'[logging]\nfile = "{sentinel}"'))
+    assert config.logging.file is None
+
+
+def test_logging_level_is_trimmed_and_uppercased(tmp_path) -> None:
+    config = _load_global(tmp_path, _global(sections='[logging]\nlevel = " debug "'))
+    assert config.logging.level == "DEBUG"
+
+
+@pytest.mark.parametrize("setting", ['max_bytes = "5"', "max_bytes = 1.9", "backup_count = 2.7", "max_bytes = true"])
+def test_logging_retention_rejects_coerced_values(tmp_path, setting) -> None:
+    with pytest.raises(ValueError):
+        _load_global(tmp_path, _global(sections=f"[logging]\n{setting}"))
+
+
+# Schema version type strictness, both loaders.
+
+@pytest.mark.parametrize("value", ["true", "1.0", '"1"', "2"])
+def test_global_schema_version_requires_integer_one(tmp_path, value) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, _global(schema=f"schema_version = {value}\n\n"))
+    assert _issues(caught) == [("literal_error", ("schema_version",))]
+    assert "schema_version = 1" in caught.value.issues[0].hint
+
+
+@pytest.mark.parametrize("value", ["true", "1.0", '"1"', "2"])
+def test_project_schema_version_requires_integer_one(tmp_path, value) -> None:
+    base = _load_global(tmp_path, _global())
+    with pytest.raises(ValueError) as caught:
+        _load_project(tmp_path, base, f"schema_version = {value}\n")
+    assert _issues(caught) == [("literal_error", ("schema_version",))]
+    assert "schema_version = 1" in caught.value.issues[0].hint
+
+
+def test_project_schema_version_one_loads(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    assert _load_project(tmp_path, base, "schema_version = 1\n") == base
+
+
+# Target identity and type validation through the public loader.
+
+_TARGET = 'id = "primary"\nbackend = "codex"'
+
+
+def _with_target(tmp_path, target_body: str, extra: str = ""):
+    text = _global().replace(_TARGET, target_body) + extra
+    return _load_global(tmp_path, text)
+
+
+def test_duplicate_target_ids_are_rejected(tmp_path) -> None:
+    extra = '\n[[targets]]\nid = "primary"\nbackend = "pi"\n'
+    with pytest.raises(ValueError) as caught:
+        _load_global(tmp_path, _global(sections=extra))
+    assert _issues(caught) == [("duplicate_target", ("targets", 1))]
+    assert caught.value.payload()["code"] == "config_invalid"
+
+
+@pytest.mark.parametrize(
+    ("body", "code", "loc"),
+    [
+        ('backend = "codex"', "missing", ("targets", 0, "id")),
+        ('id = ""\nbackend = "codex"', "empty_string", ("targets", 0, "id")),
+        ('id = "  "\nbackend = "codex"', "empty_string", ("targets", 0, "id")),
+        ('id = "primary"', "missing", ("targets", 0, "backend")),
+        ('id = "primary"\nbackend = "nope"', "literal_error", ("targets", 0, "backend")),
+        ('id = "primary"\nbackend = 3', "literal_error", ("targets", 0, "backend")),
+        (f'{_TARGET}\nargs = "--x"', "list_type", ("targets", 0, "args")),
+        (f"{_TARGET}\nargs = 5", "list_type", ("targets", 0, "args")),
+        (f"{_TARGET}\nargs = [1]", "string_type", ("targets", 0, "args", 0)),
+        (f'{_TARGET}\nargs = ["a", false]', "string_type", ("targets", 0, "args", 1)),
+        (f"{_TARGET}\nmodel = 1", "string_type", ("targets", 0, "model")),
+        (f"{_TARGET}\nreasoning = true", "string_type", ("targets", 0, "reasoning")),
+        (f"{_TARGET}\nsystem_prompt = 2", "string_type", ("targets", 0, "system_prompt")),
+        (f"{_TARGET}\nbackend_profile = 1.5", "string_type", ("targets", 0, "backend_profile")),
+    ],
+)
+def test_target_identity_and_type_errors_carry_code_and_loc(tmp_path, body, code, loc) -> None:
+    with pytest.raises(ValueError) as caught:
+        _with_target(tmp_path, body)
+    assert _issues(caught) == [(code, loc)]
+    assert caught.value.payload()["code"] == "config_invalid"
+
+
+# Logging validation through the public loader.
+
+def _logging(tmp_path, body: str):
+    return _load_global(tmp_path, _global(sections=f"[logging]\n{body}"))
+
+
+def test_logging_file_false_disables_log_file(tmp_path) -> None:
+    assert _logging(tmp_path, "file = false").logging.file is None
+
+
+@pytest.mark.parametrize("value", ["true", "5", "['a']"])
+def test_logging_file_rejects_non_string_paths(tmp_path, value) -> None:
+    with pytest.raises(ValueError) as caught:
+        _logging(tmp_path, f"file = {value}")
+    assert _issues(caught) == [("log_file_type", ("logging", "file"))]
+
+
+def test_logging_file_defaults_and_resolves_relative_to_home(tmp_path) -> None:
+    config = _logging(tmp_path, 'file = "logs/app.log"')
+    assert config.logging.file == config.home / "logs" / "app.log"
+    assert _load_global(tmp_path, _global()).logging.file is not None
+
+
+def test_logging_file_keeps_absolute_path(tmp_path) -> None:
+    target = tmp_path / "abs" / "app.log"
+    assert _logging(tmp_path, f"file = '{target}'").logging.file == target
+
+
+@pytest.mark.parametrize("level", ['"LOUD"', '""', "5", "true"])
+def test_logging_level_rejects_invalid_and_non_string(tmp_path, level) -> None:
+    with pytest.raises(ValueError) as caught:
+        _logging(tmp_path, f"level = {level}")
+    assert [loc for _, loc in _issues(caught)] == [("logging", "level")]
+
+
+@pytest.mark.parametrize(
+    ("setting", "loc"),
+    [("max_bytes = 0", ("logging", "max_bytes")), ("backup_count = -1", ("logging", "backup_count"))],
+)
+def test_logging_retention_rejects_out_of_range(tmp_path, setting, loc) -> None:
+    with pytest.raises(ValueError) as caught:
+        _logging(tmp_path, setting)
+    assert _issues(caught) == [("greater_than_equal", loc)]
+
+
+def test_logging_backup_count_zero_is_accepted(tmp_path) -> None:
+    assert _logging(tmp_path, "backup_count = 0").logging.backup_count == 0
+
+
+# Project overlay edge cases.
+
+def test_empty_project_file_preserves_base(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    assert _load_project(tmp_path, base, "") == base
+
+
+def test_project_empty_targets_preserves_base(tmp_path) -> None:
+    base = _load_global(tmp_path, _global())
+    assert _load_project(tmp_path, base, "targets = []\n") == base
+
+
+@pytest.mark.parametrize(
+    ("text", "code", "loc"),
+    [
+        ('targets = "primary"\n', "list_type", ("targets",)),
+        ("targets = 5\n", "list_type", ("targets",)),
+        ("targets = [1]\n", "model_type", ("targets", 0)),
+        ('[targets]\nid = "primary"\n', "list_type", ("targets",)),
+    ],
+)
+def test_malformed_project_target_container_is_rejected(tmp_path, text, code, loc) -> None:
+    base = _load_global(tmp_path, _global())
+    with pytest.raises(ValueError) as caught:
+        _load_project(tmp_path, base, text)
+    assert _issues(caught) == [(code, loc)]

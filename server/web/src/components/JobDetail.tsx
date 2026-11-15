@@ -30,7 +30,7 @@ function metadataRows(detail: Detail): [string, string | number | null | undefin
     ["Profile", detail.profile],
     ["Target", detail.target],
     ["Session", detail.session],
-    ["Retry of", detail.retry_of],
+    ["From job", detail.from_job || null],
     ["Created", detail.created_at],
     ["Updated", detail.updated_at],
     ["Started", detail.started_at],

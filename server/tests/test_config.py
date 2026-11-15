@@ -10,23 +10,21 @@ from refract.config import (
     RetryPolicy,
     TargetConfig,
     TargetSelection,
-    _notifications_config,
-    _profile_declarations,
-    _resolve_profile_maps,
-    _target_selection,
-    _validate_env_mapping,
     load_config,
     load_project_config,
     load_guidance,
     validate_target_args,
 )
-from refract.planning import resolve_execution_plan
+from refract.config.load import ProfileResolutionError, _resolve_profile_maps
+from refract.runner.planning import resolve_execution_plan
 from refract.workflows import get_workflow
 from tests.orchestration_helpers import Raised, config, outcome, plain
 
 
 def _explicit_config() -> str:
-    return """[daemon]
+    return """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -91,8 +89,8 @@ def test_missing_config_file_is_rejected(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("section", "config"),
     [
-        ("targets", '[daemon]\ndefault_profile = "balanced"\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n'),
-        ("profiles", '[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n'),
+        ("targets", 'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n'),
+        ("profiles", 'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n'),
     ],
 )
 def test_required_config_sections_must_be_present(tmp_path, section, config) -> None:
@@ -108,11 +106,11 @@ def test_required_config_sections_must_be_present(tmp_path, section, config) -> 
     [
         (
             "targets",
-            '[daemon]\ndefault_profile = "balanced"\n[targets]\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n',
+            'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n[targets]\n[profiles.balanced]\nimplement = "primary"\nreview = "primary"\nconsult = "primary"\n',
         ),
         (
             "profiles",
-            '[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n[profiles]\n',
+            'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n[[targets]]\nid = "primary"\nbackend = "codex"\n[profiles]\n',
         ),
     ],
 )
@@ -125,11 +123,11 @@ def test_required_config_sections_must_not_be_empty(tmp_path, section, config) -
 
 
 @pytest.mark.parametrize(
-    "daemon", ["[daemon]", '[daemon]\ndefault_profile = "missing"'],
+    "daemon", ["[daemon]", 'schema_version = 1\n\n[daemon]\ndefault_profile = "missing"'],
 )
 def test_default_profile_must_be_explicit_and_known(tmp_path, daemon) -> None:
     path = tmp_path / "config.toml"
-    path.write_text(_explicit_config().replace('[daemon]\ndefault_profile = "balanced"', daemon), encoding="utf-8")
+    path.write_text(_explicit_config().replace('schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"', daemon), encoding="utf-8")
 
     with pytest.raises(ValueError, match="default_profile"):
         load_config(path)
@@ -177,7 +175,9 @@ consult = "primary"
 
 
 def _profile_chain_config(profiles: str) -> str:
-    return f"""[daemon]
+    return f"""schema_version = 1
+
+[daemon]
 default_profile = "child"
 
 [[targets]]
@@ -543,7 +543,8 @@ def test_claude_target_loads_without_error(tmp_path) -> None:
 def test_custom_target_defaults_support_all_semantic_workflows(tmp_path, monkeypatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.toml").write_text("""[[targets]]
+    (home / "config.toml").write_text("""schema_version = 1
+[[targets]]
 id = "primary"
 backend = "codex"
 [daemon]
@@ -613,7 +614,7 @@ def test_removed_history_settings_fail_load(tmp_path, setting) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=rf"\[daemon\]\.{setting} has been removed"):
+    with pytest.raises(ValueError, match="Unsupported daemon settings"):
         load_config(path)
 
 
@@ -643,7 +644,7 @@ def test_breaker_config_defaults(tmp_path) -> None:
 def test_breaker_max_cooldown_must_not_be_below_base(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config().replace('default_profile = "balanced"', 'default_profile = "balanced"\nbreaker_base_cooldown_s = 80\nbreaker_max_cooldown_s = 60'), encoding="utf-8")
-    with pytest.raises(ValueError, match="Invalid configuration"):
+    with pytest.raises(ValueError, match=r"breaker_max_cooldown_s must be >= breaker_base_cooldown_s"):
         load_config(path)
 
 
@@ -718,25 +719,6 @@ def test_notifications_config_dataclass_defaults_and_immutability() -> None:
         notif_config.enabled = True  # type: ignore[misc]
 
 
-def test_notifications_config_helper_validation() -> None:
-    assert _notifications_config(None) == NotificationsConfig(enabled=False)
-    assert _notifications_config({}) == NotificationsConfig(enabled=False)
-    assert _notifications_config({"enabled": True}) == NotificationsConfig(enabled=True)
-    assert _notifications_config({"enabled": False}) == NotificationsConfig(enabled=False)
-
-    with pytest.raises(ValueError, match=r"\[notifications\] must be a TOML table"):
-        _notifications_config("not a table")
-
-    with pytest.raises(ValueError, match=r"Unsupported notifications settings"):
-        _notifications_config({"extra": 1})
-
-    with pytest.raises(ValueError, match="notifications.enabled must be true or false"):
-        _notifications_config({"enabled": "yes"})
-
-    with pytest.raises(ValueError, match="notifications.enabled must be true or false"):
-        _notifications_config({"enabled": 1})
-
-
 def test_ask_timeout_s_default_and_custom(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config(), encoding="utf-8")
@@ -776,12 +758,12 @@ def test_project_overlay_retains_global_retry_and_rejects_project_retry(tmp_path
     global_path.write_text(
         _explicit_config().replace(
             'backend = "codex"',
-            'backend = "codex"\nretry = { attempts = 2, codes = ["rate_limit"] }',
+            'backend = "codex"\nretry = { attempts = 2, codes = ["service_error"] }',
         ),
         encoding="utf-8",
     )
     base = load_config(global_path)
-    assert base.targets[0].retry == RetryPolicy(2, ("rate_limit",), ())
+    assert base.targets[0].retry == RetryPolicy(2, ("service_error",), ())
 
     project_root = tmp_path / "project"
     (project_root / ".refract").mkdir(parents=True)
@@ -808,49 +790,6 @@ def test_target_rejects_retry_policy_alias(tmp_path) -> None:
         load_config(path)
 
 
-@pytest.mark.parametrize(
-    ("code", "replacement"),
-    [
-        ("no_agent_messages", "no_output"),
-        ("fatal_backend", "auth, invalid_model, or service_error"),
-        ("bad_cd", "bad_cwd"),
-        ("request_fatal", "no_output"),
-    ],
-    ids=["no_agent_messages", "fatal_backend", "bad_cd", "request_fatal"],
-)
-def test_retry_codes_reject_removed_code_and_name_its_replacement(tmp_path, code, replacement) -> None:
-    path = tmp_path / "config.toml"
-    path.write_text(
-        _explicit_config().replace(
-            'backend = "codex"',
-            f'backend = "codex"\nretry = {{ attempts = 1, codes = ["rate_limit", "{code}"] }}',
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError) as caught:
-        load_config(path)
-    assert str(caught.value) == f"Target retry.codes contains removed code '{code}'; use {replacement}"
-
-
-def test_removed_retry_code_error_survives_a_target_id_that_matches_other_checks(tmp_path) -> None:
-    path = tmp_path / "config.toml"
-    text = _explicit_config().replace(
-        'backend = "codex"',
-        'backend = "codex"\nretry = { attempts = 1, codes = ["no_agent_messages"] }',
-    )
-    path.write_text(text.replace('"primary"', '"positive integer"'), encoding="utf-8")
-    with pytest.raises(ValueError) as caught:
-        load_config(path)
-    assert str(caught.value) == "Target retry.codes contains removed code 'no_agent_messages'; use no_output"
-
-
-def test_retry_codes_message_passes_through_only_for_removed_codes() -> None:
-    from refract.config_inspection import sanitize_config_error
-
-    unknown = ValueError("Target 'primary' retry.codes contains removed code 'SECRET_CODE'; use no_output")
-    assert sanitize_config_error(unknown) == "Invalid configuration"
-
-
 def test_environment_declarations_preserve_source_revision_metadata(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -863,21 +802,17 @@ def test_environment_declarations_preserve_source_revision_metadata(tmp_path) ->
     assert catalog.targets[0].env == {"LOCAL": "loc"}
 
 
-def test_removed_tracing_config_section_names_removal(tmp_path) -> None:
+def test_removed_tracing_config_section_fails_as_unsupported_section(tmp_path) -> None:
     path = tmp_path / "config.toml"
     removed_section = "[lang" "fuse]\nenabled = true\n"
     path.write_text(_explicit_config() + "\n" + removed_section, encoding="utf-8")
-    with pytest.raises(ValueError, match=r"(?=.*lang" "fuse)(?=.*removed)"):
+    with pytest.raises(ValueError, match="Unsupported config sections"):
         load_config(path)
 
 
 # Characterization of private config helpers. Expected values were recorded from
 # the implementation before the complexity refactor; every case pins the result
 # or the exact error text, and the "*_before_*" cases pin which error wins.
-
-_SELECTION_TARGETS = {"a": TargetConfig("a", "codex"), "b": TargetConfig("b", "pi")}
-_PROFILE_TARGETS = (TargetConfig("a", "codex"), TargetConfig("b", "pi"))
-
 
 def _sel(targets: tuple[str, ...], timeout_s: int = 0) -> TargetSelection:
     return TargetSelection(targets, timeout_s)
@@ -887,195 +822,103 @@ def _decl(extends: str | None = None, **workflows: str) -> ProfileDeclaration:
     return ProfileDeclaration(extends, {k: _sel((v,)) for k, v in workflows.items()})
 
 
-_TARGET_SELECTION_CASES = {
-    "str_ok": ("a", _sel(("a",))),
-    "str_padded": (" a ", _sel(("a",))),
-    "str_empty": ("", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "str_blank": ("   ", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "str_unknown": ("z", Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['z']")),
-    "list_ok": (["a", "b"], _sel(("a", "b"))),
-    "list_padded": ([" a "], _sel(("a",))),
-    "list_nonstring": (
-        ["a", 1],
-        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
-    ),
-    "list_dup": (["a", "a"], Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "list_empty": ([], Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "list_unknown": (
-        ["a", "z", "y"],
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['y', 'z']"),
-    ),
-    "list_blank_item": (
-        ["a", " "],
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['']"),
-    ),
-    "dict_ok": ({"targets": ["a"], "timeout_s": 5}, _sel(("a",), 5)),
-    "dict_str_targets": ({"targets": " a "}, _sel(("a",))),
-    "dict_default_timeout": ({"targets": "a"}, _sel(("a",))),
-    "dict_timeout_zero": ({"targets": ["b"], "timeout_s": 0}, _sel(("b",))),
-    "dict_empty": ({}, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "dict_only_timeout": (
-        {"timeout_s": 3},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
-    ),
-    "dict_max_attempts": (
-        {"max_attempts": 1, "targets": ["a"]},
-        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
-    ),
-    "dict_unknown_settings": (
-        {"targets": ["a"], "y": 1, "x": 2},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['x', 'y']"),
-    ),
-    "dict_max_attempts_and_unknown": (
-        {"max_attempts": 1, "x": 1, "targets": ["a"]},
-        Raised(ValueError, "profiles workflow max_attempts has been removed; use targets[].retry.attempts"),
-    ),
-    "dict_nonstring_targets": (
-        {"targets": ["a", 2]},
-        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
-    ),
-    "dict_targets_int": (
-        {"targets": 3},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
-    ),
-    "dict_targets_dup": (
-        {"targets": ["a", "b", "a"]},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []"),
-    ),
-    "dict_targets_empty_str": (
-        {"targets": ""},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['']"),
-    ),
-    "dict_timeout_bool": (
-        {"targets": ["a"], "timeout_s": True},
-        Raised(ValueError, "timeout_s must be a non-negative integer"),
-    ),
-    "dict_timeout_negative": (
-        {"targets": ["a"], "timeout_s": -1},
-        Raised(ValueError, "timeout_s must be a non-negative integer"),
-    ),
-    "dict_timeout_str": (
-        {"targets": ["a"], "timeout_s": "5"},
-        Raised(ValueError, "timeout_s must be a non-negative integer"),
-    ),
-    "dict_timeout_float": (
-        {"targets": ["a"], "timeout_s": 1.5},
-        Raised(ValueError, "timeout_s must be a non-negative integer"),
-    ),
-    "dict_bad_timeout_and_unknown_target": (
-        {"targets": ["z"], "timeout_s": -1},
-        Raised(ValueError, "timeout_s must be a non-negative integer"),
-    ),
-    "dict_nonstring_and_bad_timeout": (
-        {"targets": [1], "timeout_s": -1},
-        Raised(ValueError, "Profile 'p' workflow 'implement' targets must contain only strings"),
-    ),
-    "dict_unknown_and_nonstring": (
-        {"targets": [1], "x": 1},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has unsupported settings: ['x']"),
-    ),
-    "none": (None, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "int": (7, Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-    "tuple": (("a",), Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: []")),
-}
+def _selection_config(workflow_value: str, profiles_extra: str = "") -> str:
+    return (
+        "schema_version = 1\n\n"
+        '[daemon]\ndefault_profile = "p"\n\n'
+        '[[targets]]\nid = "a"\nbackend = "codex"\n\n'
+        '[[targets]]\nid = "b"\nbackend = "pi"\n\n'
+        f"[profiles.p]\n{workflow_value}\n{profiles_extra}"
+    )
 
 
-@pytest.mark.parametrize("case", list(_TARGET_SELECTION_CASES))
-def test_target_selection_characterization(case) -> None:
-    raw, expected = _TARGET_SELECTION_CASES[case]
-    assert outcome(
-        lambda: _target_selection(raw, profile_id="p", workflow="implement", target_by_id=_SELECTION_TARGETS)
-    ) == plain(expected)
+def _load_text(tmp_path, text: str):
+    path = tmp_path / "config.toml"
+    path.write_text(text, encoding="utf-8")
+    return load_config(path)
 
 
-_PROFILE_DECLARATION_CASES = {
-    "not_dict": ([], Raised(ValueError, "[profiles] must contain at least one profile")),
-    "empty": ({}, Raised(ValueError, "[profiles] must contain at least one profile")),
-    "none": (None, Raised(ValueError, "[profiles] must contain at least one profile")),
-    "mapping_not_dict": ({"p": "a"}, Raised(ValueError, "Profile 'p' must declare extends or a workflow")),
-    "mapping_empty": ({"p": {}}, Raised(ValueError, "Profile 'p' must declare extends or a workflow")),
-    "extends_none": (
-        {"p": {"extends": None, "implement": "a"}},
-        {"p": ProfileDeclaration(None, {"implement": _sel(("a",))})},
-    ),
-    "extends_padded": (
-        {"p": {"extends": " base ", "implement": "a"}},
-        {"p": ProfileDeclaration("base", {"implement": _sel(("a",))})},
-    ),
-    "extends_only": ({"p": {"extends": "base"}}, {"p": ProfileDeclaration("base", {})}),
-    "extends_empty": (
-        {"p": {"extends": "", "implement": "a"}},
-        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
-    ),
-    "extends_blank": (
-        {"p": {"extends": "  "}},
-        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
-    ),
-    "extends_int": (
-        {"p": {"extends": 3}},
-        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
-    ),
-    "unknown_workflow": (
-        {"p": {"bogus": "a"}},
-        Raised(
-            ValueError,
-            "Unknown workflow 'bogus'; expected one of ('consult', 'implement', 'other', 'review')",
-        ),
-    ),
-    "workflows_ok": (
-        {"p": {"implement": "a", "review": ["a", "b"], "consult": {"targets": "b", "timeout_s": 9}}},
-        {
-            "p": ProfileDeclaration(
-                None, {"implement": _sel(("a",)), "review": _sel(("a", "b")), "consult": _sel(("b",), 9)}
-            )
-        },
-    ),
-    "bad_selection": (
-        {"p": {"implement": "zzz"}},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['zzz']"),
-    ),
-    "int_profile_id": ({1: {"implement": "a"}}, {"1": ProfileDeclaration(None, {"implement": _sel(("a",))})}),
-    "two_profiles_ok": (
-        {"p": {"implement": "a"}, "q": {"extends": "p", "review": "b"}},
-        {
-            "p": ProfileDeclaration(None, {"implement": _sel(("a",))}),
-            "q": ProfileDeclaration("p", {"review": _sel(("b",))}),
-        },
-    ),
-    "first_bad_extends_second_bad_workflow": (
-        {"p": {"extends": 1}, "q": {"bogus": "a"}},
-        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
-    ),
-    "extends_bad_before_workflow": (
-        {"p": {"extends": 1, "bogus": "a"}},
-        Raised(ValueError, "Profile 'p' extends must be a non-empty string"),
-    ),
-    "workflow_bad_before_selection": (
-        {"p": {"bogus": "zzz"}},
-        Raised(
-            ValueError,
-            "Unknown workflow 'bogus'; expected one of ('consult', 'implement', 'other', 'review')",
-        ),
-    ),
-    "first_workflow_error_wins": (
-        {"p": {"implement": "zzz", "bogus": "a"}},
-        Raised(ValueError, "Profile 'p' workflow 'implement' has invalid targets: ['zzz']"),
-    ),
-    "second_profile_error": (
-        {"p": {"implement": "a"}, "q": {}},
-        Raised(ValueError, "Profile 'q' must declare extends or a workflow"),
-    ),
-    "extends_position_last": (
-        {"p": {"implement": "a", "extends": "x"}},
-        {"p": ProfileDeclaration("x", {"implement": _sel(("a",))})},
-    ),
-}
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('implement = "a"', _sel(("a",))),
+        ('implement = " a "', _sel(("a",))),
+        ('implement = ["a", "b"]', _sel(("a", "b"))),
+        ('implement = { targets = "a" }', _sel(("a",))),
+        ('implement = { targets = ["b"], timeout_s = 30 }', _sel(("b",), 30)),
+    ],
+)
+def test_profile_selection_shapes_load(tmp_path, value, expected) -> None:
+    assert _load_text(tmp_path, _selection_config(value)).profiles["p"]["implement"] == expected
 
 
-@pytest.mark.parametrize("case", list(_PROFILE_DECLARATION_CASES))
-def test_profile_declarations_characterization(case) -> None:
-    raw, expected = _PROFILE_DECLARATION_CASES[case]
-    assert outcome(lambda: _profile_declarations(raw, _PROFILE_TARGETS)) == plain(expected)
+@pytest.mark.parametrize(
+    ("value", "code", "loc"),
+    [
+        ('implement = "zzz"', "unknown_target", ("profiles", "p", "implement", "targets", 0)),
+        ('implement = ["a", "a"]', "duplicate_selection_target", ("profiles", "p", "implement", "targets", 1)),
+        ('implement = ""', "unknown_target", ("profiles", "p", "implement", "targets", 0)),
+        ("implement = []", "too_short", ("profiles", "p", "implement", "targets")),
+        ("implement = { targets = [1] }", "string_type", ("profiles", "p", "implement", "targets", 0)),
+        ('implement = { targets = ["a"], timeout_s = -1 }', "greater_than_equal", ("profiles", "p", "implement", "timeout_s")),
+        ('implement = { targets = ["a"], extra = 1 }', "extra_forbidden", ("profiles", "p", "implement", "extra")),
+        ("implement = 5", "model_type", ("profiles", "p", "implement")),
+        ('implement = "a"\nbogus = "a"', "extra_forbidden", ("profiles", "p", "bogus")),
+    ],
+)
+def test_profile_selection_errors_carry_code_and_loc(tmp_path, value, code, loc) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, _selection_config(value))
+    assert [(issue.code, issue.loc) for issue in caught.value.issues] == [(code, loc)]
+
+
+@pytest.mark.parametrize(
+    ("body", "code", "loc"),
+    [
+        ("", "empty_profile", ("profiles", "q")),
+        ('extends = ""', "empty_string", ("profiles", "q", "extends")),
+        ("extends = 3", "string_type", ("profiles", "q", "extends")),
+        ('extends = "missing"', "unknown_parent", ("profiles", "q", "extends")),
+    ],
+)
+def test_profile_declaration_errors_carry_code_and_loc(tmp_path, body, code, loc) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, _selection_config('implement = "a"', f"\n[profiles.q]\n{body}\n"))
+    assert [(issue.code, issue.loc) for issue in caught.value.issues] == [(code, loc)]
+
+
+@pytest.mark.parametrize(
+    ("env", "code"),
+    [
+        ('{ "" = "1" }', "env_key_empty"),
+        ('{ "A=B" = "1" }', "env_key_equals"),
+        ('{ "A\\u0000" = "1" }', "env_key_nul"),
+        ('{ REFRACT_ASK_X = "1" }', "env_key_reserved"),
+        ('{ A = "x\\u0000" }', "env_value_nul"),
+        ('{ A = "${HOME}" }', "env_value_interpolation"),
+        ("{ A = 1 }", "string_type"),
+        ("{ A = true }", "string_type"),
+    ],
+)
+def test_target_env_errors_carry_code(tmp_path, env, code) -> None:
+    text = _selection_config('implement = "a"').replace(
+        'id = "a"\nbackend = "codex"\n', f'id = "a"\nbackend = "codex"\nenv = {env}\n'
+    )
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, text)
+    assert [issue.code for issue in caught.value.issues] == [code]
+    assert all(issue.loc[:3] == ("targets", 0, "env") for issue in caught.value.issues)
+
+
+def test_every_load_error_maps_to_config_invalid_payload(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, _selection_config('implement = "zzz"'))
+    payload = caught.value.payload()
+    assert payload["code"] == "config_invalid"
+    assert all(set(entry) == {"code", "loc", "msg", "hint"} for entry in payload["errors"])
+    assert [(entry["code"], entry["loc"]) for entry in payload["errors"]] == [
+        ("unknown_target", ["profiles", "p", "implement", "targets", 0])
+    ]
 
 
 _RESOLVE_PROFILE_MAP_CASES = {
@@ -1351,58 +1194,65 @@ _RESOLVE_PROFILE_MAP_CASES = {
 @pytest.mark.parametrize("case", list(_RESOLVE_PROFILE_MAP_CASES))
 def test_resolve_profile_maps_characterization(case) -> None:
     (declarations, snapshots), expected = _RESOLVE_PROFILE_MAP_CASES[case]
-    assert outcome(lambda: _resolve_profile_maps(declarations, snapshots=snapshots)) == plain(expected)
+    def call():
+        try:
+            return _resolve_profile_maps(declarations, snapshots=snapshots)
+        except ProfileResolutionError as exc:
+            raise ValueError(str(exc)) from exc
+
+    assert outcome(call) == plain(expected)
 
 
-_ENV_MAPPING_CASES = {
-    "not_dict": ([], Raised(ValueError, "ctx must be a TOML table")),
-    "none": (None, Raised(ValueError, "ctx must be a TOML table")),
-    "empty": ({}, {}),
-    "ok": ({"A": "1", "B": "two"}, {"A": "1", "B": "two"}),
-    "empty_key": ({"": "x"}, Raised(ValueError, "Environment key cannot be empty in ctx")),
-    "int_key": ({1: "x"}, Raised(ValueError, "Environment key cannot be empty in ctx")),
-    "eq_key": ({"A=B": "x"}, Raised(ValueError, "Environment key cannot contain '=' in ctx")),
-    "nul_key": ({"A\x00": "x"}, Raised(ValueError, "Environment key cannot contain NUL bytes in ctx")),
-    "protected_prefix": (
-        {"REFRACT_ASK_URL": "x"},
-        Raised(ValueError, "Environment keys cannot use protected prefix REFRACT_ASK_ in ctx"),
-    ),
-    "prefix_like_ok": (
-        {"REFRACT_ASK": "x", "XREFRACT_ASK_": "y"},
-        {"REFRACT_ASK": "x", "XREFRACT_ASK_": "y"},
-    ),
-    "bool_value": ({"A": True}, Raised(ValueError, "Environment values must be strings in ctx")),
-    "int_value": ({"A": 1}, Raised(ValueError, "Environment values must be strings in ctx")),
-    "none_value": ({"A": None}, Raised(ValueError, "Environment values must be strings in ctx")),
-    "nul_value": ({"A": "a\x00"}, Raised(ValueError, "Environment values cannot contain NUL bytes in ctx")),
-    "template_value": (
-        {"A": "${HOME}"},
-        Raised(ValueError, "${NAME} in targets[].env has been removed; write the literal value"),
-    ),
-    "dollar_ok": ({"A": "$HOME {x}"}, {"A": "$HOME {x}"}),
-    "empty_value_ok": ({"A": ""}, {"A": ""}),
-    "eq_and_nul_key": ({"=\x00": "x"}, Raised(ValueError, "Environment key cannot contain '=' in ctx")),
-    "nul_and_template_value": (
-        {"A": "\x00${x}"},
-        Raised(ValueError, "Environment values cannot contain NUL bytes in ctx"),
-    ),
-    "prefix_before_value": (
-        {"REFRACT_ASK_X": 1},
-        Raised(ValueError, "Environment keys cannot use protected prefix REFRACT_ASK_ in ctx"),
-    ),
-    "bad_value_before_later_bad_key": (
-        {"A": 1, "": "x"},
-        Raised(ValueError, "Environment values must be strings in ctx"),
-    ),
-    "later_bad": ({"A": "1", "B": 2}, Raised(ValueError, "Environment values must be strings in ctx")),
-    "eq_before_prefix": (
-        {"REFRACT_ASK_=": "x"},
-        Raised(ValueError, "Environment key cannot contain '=' in ctx"),
-    ),
-}
+def test_retry_code_literal_matches_library_codes() -> None:
+    from typing import get_args
+
+    from coding_agent_cli._classify import CLI_CODES, REQUEST_CODES, SPAWN_CODES
+    from refract.config.models import RetryCode
+
+    inline = {"timeout", "execution_error", "stdin_failed", "no_output"}
+    assert set(REQUEST_CODES) | set(SPAWN_CODES) | set(CLI_CODES) | inline == set(get_args(RetryCode))
 
 
-@pytest.mark.parametrize("case", list(_ENV_MAPPING_CASES))
-def test_validate_env_mapping_characterization(case) -> None:
-    mapping, expected = _ENV_MAPPING_CASES[case]
-    assert outcome(lambda: _validate_env_mapping(mapping, context="ctx")) == plain(expected)
+@pytest.mark.parametrize(
+    ("backend", "arg"),
+    [
+        ("agy", '"--"'),
+        ("codex", '"--"'),
+        ("pi", '"a\\u0000b"'),
+        ("codex", '"--cd", "x"'),
+        ("codex", '"--cd=x"'),
+        ("codex", '"-C", "x"'),
+        ("codex", '"-Cx"'),
+    ],
+)
+def test_load_config_rejects_unsafe_target_args(tmp_path, backend, arg) -> None:
+    text = _selection_config("implement = \"a\"").replace(
+        'id = "a"\nbackend = "codex"', f'id = "a"\nbackend = "{backend}"\nargs = [{arg}]'
+    )
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, text)
+    assert [issue.loc for issue in caught.value.issues] == [("targets", 0, "args")]
+    assert caught.value.payload()["code"] == "config_invalid"
+
+
+def test_load_config_accepts_permitted_non_codex_args(tmp_path) -> None:
+    text = _selection_config('implement = "a"').replace(
+        'id = "a"\nbackend = "codex"', 'id = "a"\nbackend = "pi"\nargs = ["--cd", "x", "-C"]'
+    )
+    assert _load_text(tmp_path, text).targets[0].args == ("--cd", "x", "-C")
+
+
+@pytest.mark.parametrize("timeout", ["true", "1.5", '"5"'])
+def test_load_config_rejects_non_integer_workflow_timeouts(tmp_path, timeout) -> None:
+    text = _selection_config(f'implement = {{ targets = ["a"], timeout_s = {timeout} }}')
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, text)
+    assert [issue.loc for issue in caught.value.issues] == [("profiles", "p", "implement", "timeout_s")]
+
+
+def test_load_config_rejects_empty_target_list_in_table_form(tmp_path) -> None:
+    with pytest.raises(ValueError) as caught:
+        _load_text(tmp_path, _selection_config("implement = { targets = [] }"))
+    assert [(i.code, i.loc) for i in caught.value.issues] == [
+        ("too_short", ("profiles", "p", "implement", "targets"))
+    ]

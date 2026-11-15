@@ -12,7 +12,13 @@ JobState = Literal[
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"succeeded", "failed", "cancelled", "interrupted"}
 )
-FAILURE_KINDS = ("cancelled", "circuit_open", "context_overflow", "replay_blocked", "request_fatal", "target_fatal", "transient")
+ERROR_CODES = Literal[
+    "unknown_project", "invalid_path", "unknown_job", "unknown_profile", "invalid_state", "config_invalid",
+    "daemon_stopping", "invalid_request", "response_too_large", "internal_error", "targets_unavailable",
+    "unknown_card", "csrf_rejected", "forbidden", "unauthorized", "conflict", "invalid_args", "not_found",
+    "runtime_unavailable", "shutdown_unavailable", "unsupported_media_type",
+]
+FAILURE_KINDS = ("cancelled", "circuit_open", "context_overflow", "request_fatal", "target_fatal", "transient")
 class ProjectView(BaseModel):
     id: str
     root: str
@@ -26,6 +32,7 @@ class JobResult(BaseModel):
     model: str | None = None
     duration_ms: int | None = None
     tokens: dict[str, int | None] | None = None
+    next_target: str | None = None
 
 
 class ConfigHealth(BaseModel):
@@ -41,33 +48,8 @@ class ConfigHealth(BaseModel):
     last_known_good_revision: str = ""
 
     @property
-    def path(self) -> str:
-        return self.source_path
-
-    @property
-    def last_attempted_at(self) -> str:
-        return self.attempted_at
-
-    @property
-    def last_successful_at(self) -> str:
-        return self.successful_at
-
-    @property
-    def current_revision(self) -> str:
-        return self.revision
-
-    @property
     def last_error(self) -> str:
         return self.latest_error
-
-    @property
-    def mtime(self) -> str:
-        return self.modification_time
-
-
-# The longer names are useful to callers that do not use the dashboard shorthand.
-ConfigurationHealth = ConfigHealth
-ConfigHealthSnapshot = ConfigHealth
 
 
 class JobView(BaseModel):
@@ -78,7 +60,7 @@ class JobView(BaseModel):
     state: JobState
     session: str
     target_id: str = ""
-    retry_of: str = ""
+    from_job: str = ""
     created_at: str
     updated_at: str
     result: JobResult = Field(default_factory=JobResult)
@@ -89,10 +71,10 @@ class JobSummary(BaseModel):
     project: str
     workflow: str
     profile: str
-    target: str
+    target_id: str
     session: str
     state: JobState
-    retry_of: str = ""
+    from_job: str = ""
     created_at: str
     updated_at: str
 
@@ -162,13 +144,15 @@ class DashboardJob(BaseModel):
 
 
 __all__ = [
+    "LIST_JOB_ID_ACTION",
+    "UNKNOWN_JOB_MESSAGE",
+    "OrchestrationError",
+    "ERROR_CODES",
     "ActionResult",
     "ConfigHealth",
     "DashboardError",
     "DashboardJob",
     "DashboardOverview",
-    "ConfigHealthSnapshot",
-    "ConfigurationHealth",
     "DaemonStatusResult",
     "FAILURE_KINDS",
     "JobResult",
@@ -179,3 +163,22 @@ __all__ = [
     "TERMINAL_STATES",
     "TargetView",
 ]
+
+
+class OrchestrationError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "internal_error",
+        next_action: str = "Retry once, then report the request ID.",
+        retry_after_s: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.next_action = next_action
+        self.retry_after_s = retry_after_s
+
+
+UNKNOWN_JOB_MESSAGE = "Job does not exist."
+LIST_JOB_ID_ACTION = "Call list for the project and use a listed job ID."

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from refract import cli, installer, updater
+from refract import cli, installer
 from refract.config import refract_home
 from tests.host_stubs import GIT_ENV, Env
 
@@ -385,11 +387,11 @@ def test_marketplace_kept_when_source_is_not_a_refract_source(env: Env) -> None:
 
 
 def test_default_sources_are_trusted_by_the_updater(tmp_path: Path) -> None:
-    assert updater._parse_source(installer.resolve_source(None), None) == ("github", None)
+    assert installer._parse_source(installer.resolve_source(None), None) == ("github", None)
     market = {"repo": installer.marketplace_arg(DEFAULT)}
-    assert updater._marketplace_source(market) == ("github", None)
+    assert installer._marketplace_source(market) == ("github", None)
     local = installer.resolve_source(str(tmp_path))
-    assert updater._parse_source(local, None) == ("clone", tmp_path.resolve())
+    assert installer._parse_source(local, None) == ("clone", tmp_path.resolve())
     assert installer.marketplace_arg(local) == local
 
 
@@ -398,7 +400,7 @@ def test_default_sources_are_trusted_by_the_updater(tmp_path: Path) -> None:
 
 def test_busy_update_lock_exits_1_without_calls(env: Env) -> None:
     stub_host(env, "claude")
-    with updater._file_lock(refract_home() / "update.lock") as held:
+    with installer._file_lock(refract_home() / "update.lock") as held:
         assert held
         code, lines = run("install", ["claude"])
     assert code == 1
@@ -421,7 +423,7 @@ def test_launch_failure_reports_cannot_run(
     def refuse(_args: list[str]) -> list[str]:
         raise OSError("no launcher")
 
-    monkeypatch.setattr(updater, "prepare_command", refuse)
+    monkeypatch.setattr(installer, "prepare_command", refuse)
     code, lines = run(action, [host])
     assert code == 1
     assert f"{host}: failed: cannot run {host}" in lines
@@ -1179,3 +1181,28 @@ def test_report_failure_renders_file_steps() -> None:
     step = installer._FileStep("copy", Path("src"), Path("dst"))
     installer._report_failure("agy-ide", "boom", [step], lines.append)
     assert lines == ["agy-ide: failed: boom", "agy-ide: applied: copy src -> dst"]
+
+
+def test_run_closes_stdin_and_disables_ssh_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(installer.subprocess, "run", lambda args, **kwargs: seen.append(kwargs))
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    installer._run(["git", "x"], 1.0)
+    assert seen[0]["stdin"] is subprocess.DEVNULL
+    assert seen[0]["env"]["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
+    assert seen[0]["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_run_keeps_existing_ssh_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(installer.subprocess, "run", lambda args, **kwargs: seen.append(kwargs))
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i /k")
+    installer._run(["git", "x"], 1.0)
+    assert seen[0]["env"]["GIT_SSH_COMMAND"] == "ssh -i /k"
+
+
+def test_parse_source_percent_decodes_file_url(tmp_path: Path) -> None:
+    target = tmp_path / "my dir" / "repo"
+    assert installer._parse_source(target.as_uri(), None) == ("clone", target)
+    if sys.platform != "win32":  # A file URL without a drive is not an absolute path on Windows.
+        assert installer._parse_source("file:///tmp/my%20plugin", None) == ("clone", Path("/tmp/my plugin"))

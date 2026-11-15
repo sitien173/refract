@@ -7,8 +7,8 @@ from contextlib import closing
 
 import pytest
 
-from refract.database import Database
-from tests.test_storage_v3 import _schema_18, _schema_19, _user_version
+from refract.store.database import Database
+from refract.store import schema
 
 
 def table_columns(database: Database, table: str) -> set[str]:
@@ -18,60 +18,6 @@ def table_columns(database: Database, table: str) -> set[str]:
     }
 
 
-# Schema 20 as shipped at 49bc8621: job_metrics without profile.
-SCHEMA_20_METRICS_DDL = (
-    """CREATE TABLE job_metrics (
-    job_id TEXT PRIMARY KEY,
-    finished_at TEXT NOT NULL,
-    workflow TEXT NOT NULL,
-    target TEXT NOT NULL,
-    backend TEXT NOT NULL,
-    model TEXT NOT NULL,
-    state TEXT NOT NULL,
-    failure_kind TEXT,
-    duration_ms INTEGER,
-    tok_input INTEGER,
-    tok_output INTEGER,
-    tok_cache_read INTEGER,
-    tok_cache_write INTEGER,
-    attempts INTEGER,
-    skipped_targets INTEGER,
-    retry_of TEXT NOT NULL DEFAULT ''
-)""",
-    "CREATE INDEX job_metrics_finished_idx ON job_metrics(finished_at)",
-    """CREATE TABLE telemetry_outbox (
-    id INTEGER PRIMARY KEY,
-    event_key TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    send_attempts INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at TEXT NOT NULL
-)""",
-)
-
-
-def _schema_20(path) -> str:
-    """Create a schema 20 database: a retained job, its metrics row, and a metrics row whose job was pruned."""
-    job_id = _schema_19(path)
-    with closing(sqlite3.connect(path)) as connection:
-        for statement in SCHEMA_20_METRICS_DDL:
-            connection.execute(statement)
-        for metric_id in (job_id, "pruned-job"):
-            connection.execute(
-                "INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state) "
-                "VALUES (?, 't2', 'implement', 'target-a', 'codex', 'm', 'succeeded')",
-                (metric_id,),
-            )
-        connection.execute("PRAGMA user_version=20")
-        connection.commit()
-    return job_id
-
-
-def _profiles(path) -> dict[str, str]:
-    with closing(sqlite3.connect(path)) as connection:
-        return dict(connection.execute("SELECT job_id, profile FROM job_metrics").fetchall())
-
-
 @pytest.mark.parametrize("failure", ["connection", "schema"])
 def test_initialization_failure_closes_connection(tmp_path, monkeypatch, failure) -> None:
     real_connect = sqlite3.connect
@@ -79,22 +25,21 @@ def test_initialization_failure_closes_connection(tmp_path, monkeypatch, failure
 
     class FailingConnection(sqlite3.Connection):
         def execute(self, statement, *args, **kwargs):
-            if failure == "connection" and statement == "PRAGMA foreign_keys=ON":
+            if failure == "connection" and statement == "PRAGMA journal_mode=WAL":
                 raise sqlite3.OperationalError("connection setup failed")
             return super().execute(statement, *args, **kwargs)
+
+        def executescript(self, script):
+            if failure == "schema":
+                raise sqlite3.OperationalError("schema setup failed")
+            return super().executescript(script)
 
     def track_connection(*args, **kwargs):
         connection = real_connect(*args, factory=FailingConnection, **kwargs)
         opened.append(connection)
         return connection
 
-    def fail_schema(self):
-        self._connection.execute("SELECT 1")
-        raise sqlite3.OperationalError("schema setup failed")
-
     monkeypatch.setattr(sqlite3, "connect", track_connection)
-    if failure == "schema":
-        monkeypatch.setattr(Database, "_create_schema", fail_schema)
     with pytest.raises(sqlite3.OperationalError, match="setup failed"):
         Database(tmp_path / "refract.db")
 
@@ -112,7 +57,7 @@ def test_create_job_persists_fresh_flag(tmp_path) -> None:
         workflow="consult",
         profile="balanced",
         prompt="question",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="consult",
     )
     database.create_job(
@@ -121,7 +66,7 @@ def test_create_job_persists_fresh_flag(tmp_path) -> None:
         workflow="consult",
         profile="balanced",
         prompt="question",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="consult",
         fresh=True,
     )
@@ -146,7 +91,7 @@ def test_jobs_load_with_one_query(tmp_path) -> None:
             workflow="consult",
             profile="balanced",
             prompt=job_id,
-            execution_plan_json="{}",
+            plan_json="{}",
             session="consult",
         )
     statements: list[str] = []
@@ -167,7 +112,7 @@ def test_job_overview_bounds_terminal_jobs_and_uses_project_index(tmp_path) -> N
         job_id = f"job-{index:02d}"
         database.create_job(
             job_id=job_id, project_id=project.id, workflow="consult", profile="balanced",
-            prompt=job_id, execution_plan_json="{}", session="consult",
+            prompt=job_id, plan_json="{}", session="consult",
         )
         if index >= 2:
             database.finish_job(job_id, "succeeded")
@@ -189,7 +134,7 @@ def test_fresh_success_clears_multiple_stale_sessions_and_preserves_unrelated(tm
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="job", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json="{}", session="stream-1",
+        prompt="p", plan_json="{}", session="stream-1",
     )
     database.start_job("job")
 
@@ -225,43 +170,44 @@ def test_fresh_success_clears_multiple_stale_sessions_and_preserves_unrelated(tm
     assert database.session(project.id, "stream-1", "implement", "secondary-key") == ""
 
     rows = database._connection.execute(
-        "SELECT target_key, backend_session_id FROM target_sessions WHERE project_id=? AND session=? AND workflow=?",
+        "SELECT target_key, backend_session_id FROM backend_sessions WHERE project_id=? AND session=? AND workflow=?",
         (project.id, "stream-1", "implement"),
     ).fetchall()
     assert [tuple(row) for row in rows] == [("primary-key", "replacement-sess")]
 
     assert database.session(project.id, "stream-2", "review", "primary-key") == "unrelated-sess"
-    metric = database._connection.execute("SELECT state, backend, attempts FROM job_metrics WHERE job_id='job'").fetchone()
-    assert tuple(metric) == ("succeeded", "", None)
+    attempt = database._connection.execute("SELECT state, backend, reason FROM attempts WHERE job_id='job'").fetchall()
+    assert [tuple(row) for row in attempt] == [("succeeded", "", "initial")]
     database.close()
 
 
 
-def test_two_terminal_writes_replace_one_metrics_row(tmp_path):
+def test_second_terminal_write_changes_nothing_and_reports_the_loss(tmp_path):
     database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="terminal", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json='{"targets":[{"id":"target","backend":"codex"}]}', session="s",
+        prompt="p", plan_json='{"targets":[{"id":"target","backend":"codex"}]}', session="s",
     )
 
-    database.finish_job("terminal", "failed", target="target", model="first", error="old")
-    database.finish_job("terminal", "succeeded", target="target", model="second", tokens={"input": 7})
+    assert database.finish_job("terminal", "failed", target="target", model="first", error="old") is True
+    assert database.finish_job("terminal", "succeeded", target="target", model="second", tokens={"input": 7}) is False
 
-    rows = database._connection.execute("SELECT * FROM job_metrics WHERE job_id='terminal'").fetchall()
+    rows = database._connection.execute("SELECT * FROM attempts WHERE job_id='terminal'").fetchall()
     assert len(rows) == 1
     assert (rows[0]["state"], rows[0]["model"], rows[0]["backend"], rows[0]["tok_input"]) == (
-        "succeeded", "second", "codex", 7,
+        "failed", "first", "codex", None,
     )
+    assert database.job_record("terminal")["state"] == "failed"
     database.close()
 
 
-def test_fresh_success_writes_complete_metrics_row(tmp_path):
+def test_fresh_success_writes_complete_attempt_row(tmp_path):
     database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="fresh-metrics", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json='{"targets":[{"id":"target","backend":"claude"}]}',
+        prompt="p", plan_json='{"targets":[{"id":"target","backend":"claude"}]}',
         session="s", fresh=True,
     )
 
@@ -271,7 +217,7 @@ def test_fresh_success_writes_complete_metrics_row(tmp_path):
         text="done", model="model-x", tokens={"input": 11, "output": 3},
     )
 
-    row = database._connection.execute("SELECT * FROM job_metrics WHERE job_id='fresh-metrics'").fetchone()
+    row = database._connection.execute("SELECT * FROM attempts WHERE job_id='fresh-metrics'").fetchone()
     assert row is not None
     assert (row["state"], row["target"], row["backend"], row["model"], row["tok_input"], row["tok_output"]) == (
         "succeeded", "target", "claude", "model-x", 11, 3,
@@ -285,11 +231,11 @@ def test_empty_or_malformed_execution_plan_writes_unassigned_backend(tmp_path):
     for job_id, plan in (("empty-plan", "{}"), ("malformed-plan", "not json")):
         database.create_job(
             job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-            prompt="p", execution_plan_json=plan, session=job_id,
+            prompt="p", plan_json=plan, session=job_id,
         )
         database.finish_job(job_id, "failed", target="target")
         row = database._connection.execute(
-            "SELECT state, backend FROM job_metrics WHERE job_id=?", (job_id,),
+            "SELECT state, backend FROM attempts WHERE job_id=?", (job_id,),
         ).fetchone()
         assert tuple(row) == ("failed", "")
     database.close()
@@ -300,7 +246,7 @@ def test_non_string_backend_in_plan_still_persists_terminal_job_with_empty_backe
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="bad-backend", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json='{"targets":[{"id":"target","backend":{"bad":"value"}}]}',
+        prompt="p", plan_json='{"targets":[{"id":"target","backend":{"bad":"value"}}]}',
         session="s",
     )
     database.start_job("bad-backend")
@@ -309,49 +255,51 @@ def test_non_string_backend_in_plan_still_persists_terminal_job_with_empty_backe
 
     assert database.job_record("bad-backend")["state"] == "failed"
     row = database._connection.execute(
-        "SELECT state, backend FROM job_metrics WHERE job_id='bad-backend'"
+        "SELECT state, backend FROM attempts WHERE job_id='bad-backend'"
     ).fetchone()
     assert tuple(row) == ("failed", "")
     database.close()
 
 
-def test_interrupt_active_jobs_writes_metrics_only_for_running_jobs(tmp_path):
+def test_interrupt_active_jobs_interrupts_running_jobs_and_their_open_attempts(tmp_path):
     database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", root="/project")
     for job_id in ("running-a", "running-b", "queued"):
         database.create_job(
             job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-            prompt="p", execution_plan_json="{}", session=job_id,
+            prompt="p", plan_json="{}", session=job_id,
         )
     database.start_job("running-a")
     database.start_job("running-b")
+    database.record_job_target("running-a", "target")
 
     interrupted = database.interrupt_active_jobs()
 
     assert {row["id"] for row in interrupted} == {"running-a", "running-b"}
-    rows = database._connection.execute(
-        "SELECT job_id, state, finished_at FROM job_metrics ORDER BY job_id"
-    ).fetchall()
-    assert {row["job_id"] for row in rows} == {"running-a", "running-b"}
-    for row in rows:
-        job = database.job_record(row["job_id"])
-        assert row["state"] == "interrupted"
-        assert row["finished_at"] == job["updated_at"]
+    assert database.job_record("queued")["state"] == "queued"
+    for job_id in ("running-a", "running-b"):
+        job = database.job_record(job_id)
+        assert job["state"] == "interrupted"
+        assert job["finished_at"] == job["updated_at"]
+    rows = database._connection.execute("SELECT job_id, state FROM attempts").fetchall()
+    assert [tuple(row) for row in rows] == [("running-a", "interrupted")]
     database.close()
 
 
-def test_metrics_upsert_failure_rolls_back_terminal_job_update(tmp_path):
+def test_attempt_write_failure_rolls_back_terminal_job_update(tmp_path):
     database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="rollback", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
     database.start_job("rollback")
-    database._connection.execute("DROP TABLE job_metrics")
+    database._connection.execute(
+        "CREATE TRIGGER fail_attempt BEFORE INSERT ON attempts BEGIN SELECT RAISE(ABORT, 'attempt insert failed'); END"
+    )
 
-    with pytest.raises(sqlite3.OperationalError, match="no such table: job_metrics"):
-        database.finish_job("rollback", "failed")
+    with pytest.raises(sqlite3.DatabaseError, match="attempt insert failed"):
+        database.finish_job("rollback", "failed", target="target")
 
     assert database.job_record("rollback")["state"] == "running"
     database.close()
@@ -401,7 +349,7 @@ def test_failure_threshold_and_immediate_open(tmp_path) -> None:
 
 
 def test_cursor_roundtrip_and_validation() -> None:
-    from refract.database import decode_cursor, encode_cursor
+    from refract.store.jobs import decode_cursor, encode_cursor
 
     cursor = encode_cursor("2026-11-05T10:00:00+00:00", "job-123")
     assert isinstance(cursor, str)
@@ -427,7 +375,7 @@ def test_job_summaries_reads_no_result_files(tmp_path, monkeypatch) -> None:
         workflow="consult",
         profile="balanced",
         prompt="hello",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="sess",
     )
 
@@ -460,14 +408,19 @@ def test_job_summaries_filters_and_pagination(tmp_path) -> None:
             workflow="workflow-a" if i % 2 == 0 else "workflow-b",
             profile="balanced",
             prompt=f"prompt {i}",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="sess",
         )
         # Update created_at so ordering is deterministic
         with db._connection:
             db._connection.execute(
-                "UPDATE jobs SET created_at=?, target=?, state=? WHERE id=?",
-                (f"{now}{i}+00:00", f"target-{i % 2}", "running" if i == 0 else "succeeded", job_id),
+                "UPDATE jobs SET created_at=?, state=? WHERE id=?",
+                (f"{now}{i}+00:00", "running" if i == 0 else "succeeded", job_id),
+            )
+            db._connection.execute(
+                "INSERT INTO attempts(job_id, seq, reason, target, state, started_at) "
+                "VALUES (?, 1, 'initial', ?, 'succeeded', 'now')",
+                (job_id, f"target-{i % 2}"),
             )
 
     # Test filtering by state
@@ -544,8 +497,9 @@ def test_probe_version_restarts_when_wal_vanishes_after_the_existence_check(tmp_
     from pathlib import Path
 
     database = Database(tmp_path / "refract.db")
+    database.upsert_project(project_id="project", root="/project")
     wal = Path(f"{database._path}-wal")
-    expected = database._probe_version()
+    expected = schema._probe_version(database._path)
     assert expected
     assert wal.exists()
 
@@ -559,35 +513,36 @@ def test_probe_version_restarts_when_wal_vanishes_after_the_existence_check(tmp_
             raise FileNotFoundError(source)
 
     copies = _wal_copy_hook(monkeypatch, vanish)
-    assert database._probe_version() == expected
+    assert schema._probe_version(database._path) == expected
     assert len(copies) >= 1
     assert not list(tmp_path.glob(".version-probe-*"))
 
 
 def test_probe_version_gives_up_after_three_attempts(tmp_path, monkeypatch) -> None:
     database = Database(tmp_path / "refract.db")
+    database.upsert_project(project_id="project", root="/project")
 
     def always_vanished(source) -> None:
         raise FileNotFoundError(source)
 
     copies = _wal_copy_hook(monkeypatch, always_vanished)
     with pytest.raises(FileNotFoundError):
-        database._probe_version()
+        schema._probe_version(database._path)
     assert len(copies) == 3
     assert not list(tmp_path.glob(".version-probe-*"))
 
 
-def test_target_with_null_backend_writes_empty_backend_metrics(tmp_path):
+def test_target_with_null_backend_writes_empty_backend_attempt(tmp_path):
     database = Database(tmp_path / "refract.db")
     project = database.upsert_project(project_id="project", root="/project")
     database.create_job(
         job_id="null-backend", project_id=project.id, workflow="implement", profile="balanced",
-        prompt="p", execution_plan_json=json.dumps({"targets": [{"id": "t", "backend": None}]}),
+        prompt="p", plan_json=json.dumps({"targets": [{"id": "t", "backend": None}]}),
         session="s",
     )
     database.finish_job("null-backend", "failed", target="t")
     row = database._connection.execute(
-        "SELECT state, backend FROM job_metrics WHERE job_id='null-backend'",
+        "SELECT state, backend FROM attempts WHERE job_id='null-backend'",
     ).fetchone()
     assert tuple(row) == ("failed", "")
     database.close()
@@ -620,7 +575,7 @@ def test_interrupt_active_jobs_leaves_a_job_that_turned_terminal_after_the_selec
     for job_id in ("still-running", "finishes-first"):
         database.create_job(
             job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-            prompt="p", execution_plan_json="{}", session=job_id,
+            prompt="p", plan_json="{}", session=job_id,
         )
         database.start_job(job_id)
     race["hook"] = lambda: database.finish_job(
@@ -630,84 +585,17 @@ def test_interrupt_active_jobs_leaves_a_job_that_turned_terminal_after_the_selec
     database.interrupt_active_jobs()
 
     assert database.job_record("finishes-first")["state"] == "succeeded"
-    metrics = database.job_metrics_row("finishes-first")
-    assert (metrics["state"], metrics["tok_input"]) == ("succeeded", 5)
+    finished = database.job_record("finishes-first")
+    assert (finished["state"], finished["tok_input"]) == ("succeeded", 5)
     assert database.job_record("still-running")["state"] == "interrupted"
-    assert database.job_metrics_row("still-running")["state"] == "interrupted"
     database.close()
 
 
-def test_fresh_database_has_metrics_profile_column_at_schema_21(tmp_path) -> None:
+def test_fresh_database_is_schema_v1_without_removed_tables(tmp_path) -> None:
     path = tmp_path / "refract.db"
-    database = Database(path)
-
-    assert "profile" in table_columns(database, "job_metrics")
-    database.close()
-    assert _user_version(path) == 21
-
-
-def test_schema_20_database_migrates_and_backfills_profile_from_retained_jobs(tmp_path) -> None:
-    path = tmp_path / "refract.db"
-    job_id = _schema_20(path)
-
     Database(path).close()
 
-    assert _user_version(path) == 21
-    assert _profiles(path) == {job_id: "default", "pruned-job": ""}
-    migrated = Database(path)
-    project = migrated.upsert_project(project_id="p2", root="/p2")
-    migrated.create_job(
-        job_id="after-migration", project_id=project.id, workflow="implement", profile="fast",
-        prompt="p", execution_plan_json="{}", session="s",
-    )
-    migrated.finish_job("after-migration", "succeeded", target="target")
-    assert migrated.job_metrics_row("after-migration")["profile"] == "fast"
-    migrated.close()
-
-
-@pytest.mark.parametrize("make_old", [_schema_18, _schema_19], ids=["schema-18", "schema-19"])
-def test_schema_18_and_19_reach_schema_21_with_profile_backfilled(tmp_path, make_old) -> None:
-    path = tmp_path / "refract.db"
-    job_id = make_old(path)
-
-    Database(path).close()
-
-    assert _user_version(path) == 21
-    assert _profiles(path) == {job_id: "default"}
-
-
-def test_failed_schema_21_migration_keeps_schema_20_without_profile_column(tmp_path, monkeypatch) -> None:
-    path = tmp_path / "refract.db"
-    _schema_20(path)
-    real_connect = sqlite3.connect
-
-    class FailingConnection(sqlite3.Connection):
-        def execute(self, statement, *args, **kwargs):
-            if statement.startswith("UPDATE job_metrics SET profile"):
-                raise sqlite3.OperationalError("backfill failed")
-            return super().execute(statement, *args, **kwargs)
-
-    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: real_connect(*a, factory=FailingConnection, **k))
-
-    with pytest.raises(sqlite3.OperationalError, match="backfill failed"):
-        Database(path)
-
-    monkeypatch.undo()
-    assert _user_version(path) == 20
     with closing(sqlite3.connect(path)) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(job_metrics)")}
-    assert "profile" not in columns
-
-
-def test_newly_terminal_job_stores_its_profile_in_metrics(tmp_path) -> None:
-    database = Database(tmp_path / "refract.db")
-    project = database.upsert_project(project_id="project", root="/project")
-    database.create_job(
-        job_id="profiled", project_id=project.id, workflow="implement", profile="fast",
-        prompt="p", execution_plan_json="{}", session="s",
-    )
-
-    database.finish_job("profiled", "succeeded", target="target")
-
-    assert database.job_metrics_row("profiled")["profile"] == "fast"
-    database.close()
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert not tables & {"job_metrics", "telemetry_outbox", "sessions", "target_sessions"}

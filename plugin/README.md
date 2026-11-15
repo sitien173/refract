@@ -195,30 +195,21 @@ Antigravity does not load plugin slash commands, so the four commands are unavai
 
 `--source owner/repo` is therefore a local path, not a GitHub repository. To install a fork, pass the full URL.
 
-A fork URL installs, but `refract update` reports a Claude Code or Pi fork as untrusted and does not update it. Codex and Antigravity installs are always updated by hand.
+A fork URL installs through `refract install --source <url>`. Update forks manually with your host CLI.
 
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Every host succeeded or was already in the requested state. |
-| `1` | A host failed, a named host is not on PATH or, for `agy-ide`, not found, `-p all` found no host, another `refract update` or install holds the lock, or the lock file cannot be opened. |
+| `1` | A host failed, a named host is not on PATH or, for `agy-ide`, not found, `-p all` found no host, another install holds the lock, or the lock file cannot be opened. |
 | `2` | Usage error or unsupported scope. |
 
 ## Updating
 
-`refract update --check` looks for newer versions of the server, the Claude Code plugin, and the Pi package, and writes the result to `${REFRACT_HOME:-~/.refract}/update-check.json`. It checks at most once per 24 hours; `refract update --check --force` ignores that limit.
+`refract update` checks GitHub for the latest release, writes `${REFRACT_HOME:-~/.refract}/update-check.json`, and prints the status line plus the upgrade commands for the server and each host (`claude`, `codex`, `agy`, `agy-ide`, `pi`). It does not apply updates, stop the daemon, or modify host plugin state.
 
-`refract update` applies every available update. It refuses while the daemon has work: `Refused: <r> running, <q> queued job(s). Nothing was changed.` Run it again once the jobs finish. Otherwise it stops and restarts the daemon itself.
-
-After applying updates it prints `Restart open Claude Code, Pi, Codex, and agy sessions to load the update.`
-
-Codex and agy are not updated automatically. `refract update` prints the commands to run:
-
-```bash
-codex plugin marketplace upgrade && codex plugin add refract@<marketplace>
-agy plugin install https://github.com/sitien173/refract
-```
+`refract update --check` runs at most once per 24 hours, skips if another check holds the lock, writes the result to `${REFRACT_HOME:-~/.refract}/update-check.json`, and prints nothing.
 
 The SessionStart hook reads the cached check result and tells you and the model when an update is available. It makes no network call. When the cache is missing or older than 24 hours, it starts a detached `refract update --check` in the background. Set `REFRACT_NO_UPDATE_CHECK=1` to turn off the notice and the background check.
 
@@ -237,10 +228,10 @@ name instead:
 
 | Command | Skill to invoke in Antigravity |
 | --- | --- |
-| `/refract:brainstorm` | `brainstorming` |
-| `/refract:write-plan` | `writing-plans` |
-| `/refract:execute-plan` | `executing-plans` |
-| `/refract:execute-plan-all` | `executing-plans-autonomously` |
+| `/refract:brainstorm` | `refract:brainstorming` |
+| `/refract:write-plan` | `refract:writing-plans` |
+| `/refract:execute-plan` | `refract:executing-plans` |
+| `/refract:execute-plan-all` | `refract:executing-plans-autonomously` |
 
 In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
 `/execute-plan`, `/execute-plan-all`.
@@ -258,7 +249,7 @@ In Pi, drop the `refract:` prefix: `/brainstorm`, `/write-plan`,
 - `using-refract`: entry point; decides when coordination applies.
 - `coordinating-multi-model-work`: Refract lifecycle, Git ownership, review, handover.
 - `brainstorming`, `writing-plans`, `executing-plans`, `executing-plans-autonomously`: the three gates and full-plan autonomous execution.
-- `systematic-debugging`, `test-driven-development`, `verifying-before-completion`: process discipline.
+- `verifying-before-completion`: process discipline.
 - `using-git-worktrees`: optional isolated workspace before registration.
 
 ## Layout

@@ -9,7 +9,7 @@ export const JobSummarySchema = z.object({
   profile: z.string().nullable(),
   target: z.string().nullable(),
   session: z.string().nullable(),
-  retry_of: z.string().nullable(),
+  from_job: z.string(),
   failure_kind: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -102,7 +102,7 @@ export const JobActionResponseSchema = z.object({
   job_id: z.string(),
   state: z.string(),
   success: z.boolean().optional(),
-  retry_of: z.string().optional(),
+  from_job: z.string().optional(),
 });
 export type JobActionResponse = z.infer<typeof JobActionResponseSchema>;
 
@@ -176,7 +176,6 @@ export type TokenTotals = z.infer<typeof TokenTotalsSchema>;
 
 export const StatsResponseSchema = z.object({
   days: z.number(),
-  currency: z.string(),
   work_delegated: z.object({
     by_workflow: z.record(z.string(), z.record(z.string(), z.number())),
     by_state: z.record(z.string(), z.number()),
@@ -196,7 +195,7 @@ export const StatsResponseSchema = z.object({
   failover_saves: z.object({
     skipped_targets: z.number(),
     retries: z.number(),
-    retries_after_failure: z.number(),
+    attempts_by_reason: z.record(z.string(), z.number()),
     unknown_skipped_targets: z.number(),
     unknown_attempts: z.number(),
   }),
@@ -204,11 +203,6 @@ export const StatsResponseSchema = z.object({
     by_backend: z.record(z.string(), TokenTotalsSchema),
     by_model: z.record(z.string(), TokenTotalsSchema),
     by_target: z.record(z.string(), TokenTotalsSchema),
-  }),
-  estimated_cost: z.object({
-    total: z.number(),
-    by_model: z.record(z.string(), z.number()),
-    unpriced_models: z.array(z.string()),
   }),
 });
 export const STATS_DAYS = [1, 7, 30, 365] as const;
@@ -321,7 +315,7 @@ export function getStats(
 
 export function postJobAction(
   id: string,
-  action: "cancel" | "retry" | "answer",
+  action: "cancel" | "answer",
   body: unknown = {},
   fetcherOrSignal?: typeof fetch | AbortSignal | { signal?: AbortSignal; fetcher?: typeof fetch },
   maybeSignal?: AbortSignal,
@@ -334,6 +328,27 @@ export function postJobAction(
       method: "POST",
       headers: { "X-Refract-Dashboard": "1", "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
+      signal,
+    },
+    fetcher,
+  );
+}
+
+/** Queues a copy of a terminal job. `target` pins a target and `fresh` starts a new worker session. */
+export function submitFromJob(
+  fromJob: string,
+  options: { target?: string; fresh?: boolean } = {},
+  fetcherOrSignal?: typeof fetch | AbortSignal | { signal?: AbortSignal; fetcher?: typeof fetch },
+  maybeSignal?: AbortSignal,
+): Promise<JobActionResponse> {
+  const { fetcher, signal } = resolveRequestOptions(fetcherOrSignal, maybeSignal);
+  return request(
+    JobActionResponseSchema,
+    `${base}/jobs`,
+    {
+      method: "POST",
+      headers: { "X-Refract-Dashboard": "1", "Content-Type": "application/json" },
+      body: JSON.stringify({ from_job: fromJob, ...options }),
       signal,
     },
     fetcher,

@@ -46,6 +46,7 @@ it("renders prompt, result, and metadata tabs with the detail fields", () => {
     target: "pi",
     prompt: "The prompt",
     result: { text: "The answer", model: "m1", error: null },
+    from_job: "job-0",
     started_at: "2026-01-01T00:00:00Z",
     finished_at: null,
   } as never;
@@ -61,6 +62,9 @@ it("renders prompt, result, and metadata tabs with the detail fields", () => {
   expect(panel).toHaveTextContent("Started");
   expect(panel).toHaveTextContent("2026-01-01T00:00:00Z");
   expect(panel).toHaveTextContent("m1");
+  expect(panel).toHaveTextContent("From job");
+  expect(panel).toHaveTextContent("job-0");
+  expect(panel).not.toHaveTextContent("Retry of");
 });
 it("opens on the requested tab and keeps the transcript mounted while hidden", () => {
   const detail = { id: "j1", state: "succeeded", prompt: "P", result: { text: "R" } } as never;

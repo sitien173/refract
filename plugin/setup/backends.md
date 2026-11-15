@@ -26,7 +26,8 @@ before writing them.
 
 `id` and `backend` are required. Optional: `model`, `backend_profile`,
 `reasoning`, `system_prompt`, `args`,
-`max_concurrency`, `context_window`, `retry`, `env`. Credentials stay in each
+`max_concurrency`, `context_window`, `retry`, `env`. A `retry` policy without
+`codes` or `patterns` retries nothing. Credentials stay in each
 CLI's own store or in the target `env` table, never in `args`: target settings
 other than `env` are snapshotted into job records.
 
@@ -39,7 +40,7 @@ mapping. `[daemon].default_profile` must name a declared profile.
 
 ## Full reference
 
-- Configuration examples, environments, target retry:
+- Configuration examples, environments, target retry and restart policy:
   <https://github.com/sitien173/refract/blob/main/server/README.md>
 - Per-backend CLI flags:
   <https://github.com/sitien173/refract/blob/main/server/CLI_ARGUMENTS.md>

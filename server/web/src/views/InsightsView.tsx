@@ -374,12 +374,19 @@ function WorkDelegated({ work, windowDays }: { work: StatsResponse["work_delegat
   );
 }
 
+const ATTEMPT_REASONS = [
+  ["initial", "Initial"],
+  ["retry", "Retry"],
+  ["fresh_session", "Fresh session"],
+  ["fallback", "Fallback"],
+] as const;
+
 function FailoverSaves({ saves }: { saves: StatsResponse["failover_saves"] }) {
   const unknown = [
     saves.unknown_skipped_targets > 0 && `${saves.unknown_skipped_targets} ${saves.unknown_skipped_targets === 1 ? "job" : "jobs"} (skipped targets)`,
     saves.unknown_attempts > 0 && `${saves.unknown_attempts} ${saves.unknown_attempts === 1 ? "job" : "jobs"} (attempts)`,
   ].filter(Boolean);
-  const total = saves.skipped_targets + saves.retries + saves.retries_after_failure;
+  const total = saves.skipped_targets + saves.retries;
   return (
     <section aria-label="Failover saves" className="flex flex-col gap-3">
       <h2 className="text-xl font-semibold tracking-tight">Failover saves</h2>
@@ -387,7 +394,11 @@ function FailoverSaves({ saves }: { saves: StatsResponse["failover_saves"] }) {
         <Kpi label="Failover saves" value={count(total)} />
         <Kpi label="Jobs saved by skipping a target" value={count(saves.skipped_targets)} />
         <Kpi label="Jobs saved by a same-target retry" value={count(saves.retries)} />
-        <Kpi label="Jobs saved by retrying a failed job" value={count(saves.retries_after_failure)} />
+      </KpiGrid>
+      <KpiGrid label="Attempts by reason">
+        {ATTEMPT_REASONS.map(([reason, label]) => (
+          <Kpi key={reason} label={`${label} attempts`} value={count(saves.attempts_by_reason[reason] ?? 0)} />
+        ))}
       </KpiGrid>
       {unknown.length > 0 && <p className="text-sm text-muted-foreground">Unknown for {unknown.join(" and ")}.</p>}
     </section>
@@ -477,45 +488,6 @@ function Tokens({ tokens }: { tokens: StatsResponse["tokens"] }) {
   );
 }
 
-function Cost({ cost, currency }: { cost: StatsResponse["estimated_cost"]; currency: string }) {
-  const models = Object.entries(cost.by_model);
-  return (
-    <section aria-label="Estimated cost" className="flex flex-col gap-3">
-      <h2 className="text-xl font-semibold tracking-tight">Estimated cost</h2>
-      <KpiGrid label="Estimated cost total">
-        <Kpi label="Total" value={`${fixed(cost.total, 2)} ${currency}`} />
-      </KpiGrid>
-      {models.length > 0 && (
-        <div className="overflow-x-auto rounded-lg bg-card shadow-card">
-          <table aria-label="Estimated cost by model" className="w-full text-left text-sm">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th scope="col" className="p-3 font-medium">
-                  Model
-                </th>
-                <th scope="col" className="p-3 font-medium">
-                  Cost
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map(([model, amount]) => (
-                <tr key={model} className="border-t border-border">
-                  <td className="p-3">{model}</td>
-                  <td className="p-3">{`${fixed(amount, 4)} ${currency}`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {cost.unpriced_models.length > 0 && (
-        <p className="callout callout-warning">{`Unpriced models: ${cost.unpriced_models.join(", ")}. Their usage is left out of the estimate.`}</p>
-      )}
-    </section>
-  );
-}
-
 export function InsightsView({ stats, days, loading, error, onDaysChange, onNavigate }: InsightsViewProps) {
   return (
     <main className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
@@ -551,7 +523,6 @@ export function InsightsView({ stats, days, loading, error, onDaysChange, onNavi
           <WorkDelegated work={stats.work_delegated} windowDays={stats.days} />
           <FailoverSaves saves={stats.failover_saves} />
           <Tokens tokens={stats.tokens} />
-          <Cost cost={stats.estimated_cost} currency={stats.currency} />
         </>
       )}
     </main>

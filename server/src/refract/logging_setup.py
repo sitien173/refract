@@ -82,8 +82,16 @@ def _integer(value: str, name: str, *, minimum: int) -> int:
     return parsed
 
 
+_LOG_FILE_DISABLED = frozenset({"false", "", "none", "off", "-"})
+
+
+def is_log_file_disabled(value: str) -> bool:
+    """Return True when ``value`` is a sentinel that turns file logging off."""
+    return value.strip().lower() in _LOG_FILE_DISABLED
+
+
 def _log_file_override(value: str) -> Path | None:
-    if value.strip().lower() in {"none", "off", "-"}:
+    if is_log_file_disabled(value):
         return None
     candidate = Path(value).expanduser()
     return candidate if candidate.is_absolute() else _refract_home() / candidate
@@ -366,6 +374,7 @@ __all__ = [
     "ResolvedLoggingConfig",
     "configure",
     "get_logger",
+    "is_log_file_disabled",
     "log_context",
     "redact_text",
     "resolve_config",

@@ -7,8 +7,8 @@ import pytest
 from starlette.requests import Request
 from starlette.responses import Response
 
-from refract.dashboard import _loopback_route
-from refract.database import Database
+from refract.api.http.common import loopback_route as _loopback_route
+from refract.store.database import Database
 
 
 def test_database_workers_have_independent_connections_and_transactions(tmp_path):

@@ -1,18 +1,12 @@
 """Flat token counters: six nullable integers, null when unknown, never zero-filled."""
 
-import refract.telemetry as telemetry
-from refract.telemetry import TokenCounters
+from refract.runner.tokens import TokenCounters
 
 KEYS = ("context_used", "context_window", "input", "output", "cache_read", "cache_write")
 
 
 def test_new_counters_are_all_unknown():
     assert TokenCounters().as_dict() == dict.fromkeys(KEYS)
-
-
-def test_measurement_model_is_gone():
-    for name in ("Measurement", "TelemetryData", "TelemetryAccumulator", "flat_tokens"):
-        assert not hasattr(telemetry, name)
 
 
 def test_reported_zero_is_kept_and_unreported_field_stays_null():

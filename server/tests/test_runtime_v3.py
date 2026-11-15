@@ -7,13 +7,15 @@ from pathlib import Path
 import pytest
 
 from refract.config import load_config
-from refract.drivers import DriverResult
-from refract.planning import target_execution_key
+from refract.runner.drivers import DriverResult
+from refract.runner.planning import target_execution_key
 from refract.runtime import OrchestrationError, Runtime
 from tests.orchestration_helpers import register_project, repository
 
 
-_CONFIG = '''[daemon]
+_CONFIG = '''schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -42,9 +44,12 @@ class _Drivers:
     @staticmethod
     def available(_target): return True
 
-    async def execute(self, *, target, **_kwargs):
+    async def execute(self, *, target, on_event=None, **_kwargs):
         self.executed.append(target.id)
         if self.outcomes.get(target.id) == "fail":
+            # A tool ran, so the attempt is not replay safe and the job ends without automatic fallback.
+            if on_event:
+                await on_event({"kind": "tool.started", "tool_name": "bash"})
             return DriverResult("TARGET_FATAL", "", "", "boom", "target_fatal")
         return DriverResult("SUCCESS", f"session-{target.id}", f"done by {target.id}", "", "")
 
@@ -69,7 +74,7 @@ async def _run(runtime: Runtime, project, prompt: str = "x", session: str = "s")
 
 def _set_sticky(runtime: Runtime, project, target: str, session: str = "s") -> None:
     runtime.database._connection.execute(
-        "INSERT OR REPLACE INTO sessions(project_id, session, workflow, sticky_target, updated_at) VALUES (?, ?, 'consult', ?, 'now')",
+        "INSERT OR REPLACE INTO session_routes(project_id, session, workflow, sticky_target, updated_at) VALUES (?, ?, 'consult', ?, 'now')",
         (project.id, session, target),
     )
     runtime.database._connection.commit()
@@ -194,11 +199,11 @@ async def test_retry_creates_new_job_and_never_mutates_source(tmp_path, state) -
         before = runtime.database.job_record(source.id)
         source_file = runtime.database.result_path(source.id).read_bytes()
 
-        retried = await runtime.retry(source.id)
+        retried = await runtime.submit_from_job(source.id)
         job = await runtime.wait(retried.job_id, 5)
 
         assert retried.job_id != source.id
-        assert job.retry_of == source.id
+        assert job.from_job == source.id
         assert job.state == "succeeded"
         assert job.target_id == "b"
         assert drivers.executed[-1] == "b"
@@ -216,7 +221,7 @@ async def test_retry_with_target_pins_that_target_including_the_same_one(tmp_pat
     try:
         source = await _run(runtime, project)
         assert source.target_id == "a"
-        retried = await runtime.retry(source.id, target="a")
+        retried = await runtime.submit_from_job(source.id, target="a")
         job = await runtime.wait(retried.job_id, 5)
         assert job.target_id == "a"
         assert drivers.executed == ["a", "a"]
@@ -231,7 +236,7 @@ async def test_retry_with_unknown_target_lists_profile_targets(tmp_path) -> None
         source = await _run(runtime, project)
         jobs_before = len(runtime.database.jobs(project.id))
         with pytest.raises(OrchestrationError) as raised:
-            await runtime.retry(source.id, target="nope")
+            await runtime.submit_from_job(source.id, target="nope")
         assert raised.value.code == "invalid_request"
         assert "a, b" in str(raised.value)
         assert len(runtime.database.jobs(project.id)) == jobs_before
@@ -241,12 +246,14 @@ async def test_retry_with_unknown_target_lists_profile_targets(tmp_path) -> None
 
 @pytest.mark.asyncio
 async def test_retry_without_a_following_healthy_target_is_unavailable(tmp_path) -> None:
-    runtime, project, _drivers = await _runtime(tmp_path)
+    runtime, project, _drivers = await _runtime(tmp_path, _Drivers({"b": "fail"}))
     try:
+        _set_sticky(runtime, project, "b")
         source = await _run(runtime, project)
-        runtime.database.finish_job(source.id, "failed", target="b")
+        assert source.state == "failed"
+        assert source.target_id == "b"
         with pytest.raises(OrchestrationError) as raised:
-            await runtime.retry(source.id)
+            await runtime.submit_from_job(source.id)
         assert raised.value.code == "targets_unavailable"
         assert "a, b" in raised.value.next_action
     finally:
@@ -261,7 +268,7 @@ async def test_retry_from_active_state_is_invalid_state(tmp_path) -> None:
         runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id=?", (source.id,))
         runtime.database._connection.commit()
         with pytest.raises(OrchestrationError) as raised:
-            await runtime.retry(source.id)
+            await runtime.submit_from_job(source.id)
         assert raised.value.code == "invalid_state"
     finally:
         await runtime.close()
@@ -276,7 +283,7 @@ async def test_next_target_is_plain_name_of_following_healthy_target(tmp_path) -
         assert job.target_id == "a"
         assert runtime.live_routing(job)["retry"]["next_target"] == "b"
         _open_circuit(runtime, "b")
-        assert runtime.live_routing(job)["retry"]["next_target"] is None
+        assert runtime.live_routing(job)["retry"]["next_target"] == "b"  # the runner's decision at finish time
     finally:
         await runtime.close()
 

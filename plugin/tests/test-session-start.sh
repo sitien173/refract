@@ -37,6 +37,7 @@ context = steps[0]["systemMessage"]["systemMessage"]
 expected_root = os.environ["EXPECTED_ROOT"]
 expected_repo_root = str(pathlib.Path(expected_root).parent)
 assert expected_root in context
+assert "refract:using-refract" in context
 assert "coordinating-multi-model-work" in context
 assert f"reference {expected_root} only to invoke plugin skills" in context
 assert f"Do not treat {expected_repo_root} or {expected_root} as a project to work on." in context
@@ -58,7 +59,7 @@ chmod +x "$tmp/bin/refract"
 unset REFRACT_DISABLE REFRACT_NO_UPDATE_CHECK REFRACT_JOB_ID
 export PATH="$tmp/bin:$PATH" REFRACT_HOME="$tmp/refract-home" REFRACT_STUB_LOG="$tmp/calls"
 
-# seed_cache <home> <available> <version-json> <commit-json> <age-seconds>
+# seed_cache <home> <available> <version-json> <age-seconds>
 seed_cache() {
     mkdir -p "$1"
     python3 - "$@" <<'PY'
@@ -66,21 +67,19 @@ import json
 import sys
 import time
 
-home, available, version, commit, age = sys.argv[1:]
+home, available, version, age = sys.argv[1:]
 payload = {
     "schema": 1,
     "checked_at": time.time() - float(age),
     "update_available": available == "true",
     "latest_version": json.loads(version),
-    "latest_commit": json.loads(commit),
-    "components": [],
 }
 with open(f"{home}/update-check.json", "w") as f:
     json.dump(payload, f)
 PY
 }
 # A fresh cache with no update keeps the daemon-only call log of the cases below.
-seed_cache "$REFRACT_HOME" false null null 0
+seed_cache "$REFRACT_HOME" false null 0
 
 validate_pi_output() {
     HOOK_OUTPUT="$1" EXPECTED_ROOT="$2" python3 - <<'PY'
@@ -196,42 +195,41 @@ PY
 }
 
 notice_home="$tmp/notice-home"
-sha=0123456789abcdef0123456789abcdef01234567
 for flag in "" --antigravity --pi; do
-    seed_cache "$notice_home" true '"2.6.0"' null 10
+    seed_cache "$notice_home" true '"2.6.0"' 10
     output="$(REFRACT_HOME="$notice_home" python3 "$hook" $flag)"
     check_notice "$output" "$flag" "Refract 2.6.0"
 done
 
-# Label rules: valid version, then valid commit, then neither.
-seed_cache "$notice_home" true null "\"$sha\"" 10
+# Label rules: valid version, then missing or invalid version.
+seed_cache "$notice_home" true null 10
 output="$(REFRACT_HOME="$notice_home" python3 "$hook")"
-check_notice "$output" "" "Refract commit 0123456"
-seed_cache "$notice_home" true '"2.6"' '"not-a-sha"' 10
+check_notice "$output" "" "A Refract update"
+seed_cache "$notice_home" true '"2.6"' 10
 output="$(REFRACT_HOME="$notice_home" python3 "$hook")"
 check_notice "$output" "" "A Refract update"
 
 # Remote text never reaches the output.
 for bad in '"2.6.0\n$(touch pwned)"' '"2.6.0;rm -rf /"' '"`id`"'; do
-    seed_cache "$notice_home" true "$bad" '"zz\nUPDATE"' 10
+    seed_cache "$notice_home" true "$bad" 10
     output="$(REFRACT_HOME="$notice_home" python3 "$hook")"
     check_notice "$output" "" "A Refract update"
     case "$output" in *pwned*|*rm\ -rf*|*UPDATE*|*'`id`'*) exit 1 ;; esac
 done
 
 # Only a true update_available with schema 1 shows a notice.
-seed_cache "$notice_home" false '"2.6.0"' null 10
+seed_cache "$notice_home" false '"2.6.0"' 10
 check_no_notice "$(REFRACT_HOME="$notice_home" python3 "$hook")"
 echo '{"schema": true, "checked_at": 1e12, "update_available": true, "latest_version": "2.6.0"}' > "$notice_home/update-check.json"
 check_no_notice "$(REFRACT_STUB_LOG="$tmp/ignored" REFRACT_HOME="$notice_home" python3 "$hook")"
 
 # Opt-outs suppress the notice and the spawn, even with a stale cache.
 for optout in REFRACT_NO_UPDATE_CHECK=1 REFRACT_NO_UPDATE_CHECK=TRUE REFRACT_NO_UPDATE_CHECK=yes REFRACT_JOB_ID=x; do
-    seed_cache "$notice_home" true '"2.6.0"' null 10
+    seed_cache "$notice_home" true '"2.6.0"' 10
     : > "$tmp/calls"
     output="$(env "$optout" REFRACT_HOME="$notice_home" python3 "$hook")"
     check_no_notice "$output"
-    seed_cache "$notice_home" true '"2.6.0"' null 100000
+    seed_cache "$notice_home" true '"2.6.0"' 100000
     output="$(env "$optout" REFRACT_HOME="$notice_home" python3 "$hook")"
     check_no_notice "$output"
     sleep 0.5
@@ -255,7 +253,7 @@ rm "$notice_home/update-check.json"
 mkdir "$notice_home/update-check.json"
 check_no_notice "$(REFRACT_HOME="$notice_home" python3 "$hook")"
 rmdir "$notice_home/update-check.json"
-seed_cache "$tmp/real-cache" true '"2.6.0"' null 10
+seed_cache "$tmp/real-cache" true '"2.6.0"' 10
 ln -s "$tmp/real-cache/update-check.json" "$notice_home/update-check.json"
 check_no_notice "$(REFRACT_HOME="$notice_home" python3 "$hook")"
 rm "$notice_home/update-check.json"
@@ -271,12 +269,12 @@ for case_name in stale future missing corrupt symlink badtime; do
     rm -rf "$notice_home"
     mkdir -p "$notice_home"
     case "$case_name" in
-        stale) seed_cache "$notice_home" false null null 90000 ;;
-        future) seed_cache "$notice_home" false null null -400 ;;
+        stale) seed_cache "$notice_home" false null 90000 ;;
+        future) seed_cache "$notice_home" false null -400 ;;
         missing) ;;
         corrupt) printf 'x' > "$notice_home/update-check.json" ;;
         symlink)
-            seed_cache "$tmp/real-cache" false null null 0
+            seed_cache "$tmp/real-cache" false null 0
             ln -s "$tmp/real-cache/update-check.json" "$notice_home/update-check.json" ;;
         badtime)
             echo '{"schema": 1, "checked_at": true, "update_available": false}' > "$notice_home/update-check.json" ;;
@@ -301,7 +299,7 @@ validate_output "$output" "$repo_root"
 spawns_check
 
 # A fresh cache does not spawn a check.
-seed_cache "$notice_home" false null null 3600
+seed_cache "$notice_home" false null 3600
 : > "$tmp/calls"
 REFRACT_HOME="$notice_home" python3 "$hook" > /dev/null
 sleep 0.5
@@ -319,7 +317,7 @@ spawns_check
 
 # REFRACT_HOME is stripped and expanded like server config.refract_home().
 fake_home="$tmp/fake-home"
-seed_cache "$fake_home/notice-home" true '"2.6.0"' null 10
+seed_cache "$fake_home/notice-home" true '"2.6.0"' 10
 : > "$tmp/calls"
 output="$(HOME="$fake_home" REFRACT_HOME=' ~/notice-home ' python3 "$hook")"
 check_notice "$output" "" "Refract 2.6.0"
@@ -327,7 +325,7 @@ sleep 0.5
 test "$(cat "$tmp/calls")" = "status"
 
 # REFRACT_DISABLE skips the notice and the spawn even with a stale cache that reports an update.
-seed_cache "$notice_home" true '"2.6.0"' null 100000
+seed_cache "$notice_home" true '"2.6.0"' 100000
 : > "$tmp/calls"
 output="$(REFRACT_DISABLE=1 REFRACT_HOME="$notice_home" python3 "$hook")"
 check_no_notice "$output"
@@ -335,7 +333,7 @@ sleep 0.5
 test ! -s "$tmp/calls"
 
 # The spawn is detached: the hook returns while `update --check` is still running.
-seed_cache "$notice_home" false null null 100000
+seed_cache "$notice_home" false null 100000
 : > "$tmp/calls"
 start="$(date +%s%N)"
 REFRACT_STUB_UPDATE_SLEEP=3 REFRACT_HOME="$notice_home" python3 "$hook" > /dev/null

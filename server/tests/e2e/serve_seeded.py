@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from refract.database import Database
+from refract.store.database import Database
 from tests.launchers import install_launcher
 
 SERVER_DIR = Path(__file__).resolve().parents[2]
@@ -18,32 +18,29 @@ BACKEND = SERVER_DIR / "tests" / "fixtures" / "fake_cli" / "e2e_backend.py"
 PORT = int(os.environ.get("E2E_PORT", "18765"))
 
 
+_PLAN = '{"targets": [{"id": "e2e", "backend": "claude"}]}'
+_TOKENS = {"input": 100, "output": 50, "cache_read": 20, "cache_write": 10}
+
+
 def seed(home: Path) -> None:
     database = Database(home / "refract.db")
     try:
         project = database.upsert_project(
             project_id="e2e-project", root=str(REPOSITORY_ROOT)
         )
+        # Profile `seed` keeps these jobs apart from jobs that other e2e tests finish during the run.
         for number in range(101):
             job_id = f"e2e-seed-{number:03d}"
             database.create_job(
                 job_id=job_id,
                 project_id=project.id,
                 workflow="consult",
-                profile="e2e",
+                profile="seed",
                 prompt=f"Seeded dashboard job {number}",
-                execution_plan_json="{}",
+                plan_json=_PLAN,
                 session=f"e2e-seed-{number}",
             )
-            with database._connection:
-                database._connection.execute(
-                    "UPDATE jobs SET state='succeeded', target='e2e', started_at=created_at, finished_at=updated_at WHERE id=?",
-                    (job_id,),
-                )
-            database.results_dir.mkdir(parents=True, exist_ok=True)
-            database.result_path(job_id).write_text(
-                f"Seeded result {number}", encoding="utf-8"
-            )
+            database.start_job(job_id)
             database.append_stream(
                 job_id,
                 [
@@ -54,21 +51,37 @@ def seed(home: Path) -> None:
                     }
                 ],
             )
-        # The seed bypasses `_finish`, so write the metrics rows that a real run would have stored.
-        # Profile `seed` keeps these rows apart from jobs that other e2e tests finish during the run.
+            database.finish_job(
+                job_id,
+                "succeeded",
+                text=f"Seeded result {number}",
+                target="e2e",
+                model="e2e",
+                duration_ms=1000,
+                tokens=_TOKENS,
+            )
+        # Outside the 7 day window and inside the 30 day window, so the window switch changes the count.
+        old = "e2e-metric-old"
+        database.create_job(
+            job_id=old,
+            project_id=project.id,
+            workflow="consult",
+            profile="seed",
+            prompt="Seeded old job",
+            plan_json=_PLAN,
+            session=old,
+        )
+        database.start_job(old)
+        database.finish_job(
+            old, "succeeded", text="Seeded old result", target="e2e", model="e2e", duration_ms=1000, tokens=_TOKENS
+        )
+        finished = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
         with database._connection:
             database._connection.execute(
-                "INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model, state, failure_kind, "
-                "duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write, attempts, skipped_targets, retry_of) "
-                "SELECT id, finished_at, 'seed', workflow, 'e2e', 'claude', 'e2e', 'succeeded', NULL, 1000, 100, 50, 20, 10, 1, 0, '' "
-                "FROM jobs WHERE id LIKE 'e2e-seed-%'"
+                "UPDATE jobs SET finished_at=?, updated_at=? WHERE id=?", (finished, finished, old)
             )
-            # Outside the 7 day window and inside the 30 day window, so the window switch changes the count.
             database._connection.execute(
-                "INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model, state, failure_kind, "
-                "duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write, attempts, skipped_targets, retry_of) "
-                "VALUES ('e2e-metric-old', ?, 'seed', 'consult', 'e2e', 'claude', 'e2e', 'succeeded', NULL, 1000, 100, 50, 20, 10, 1, 0, '')",
-                ((datetime.now(timezone.utc) - timedelta(days=20)).isoformat(),),
+                "UPDATE attempts SET started_at=?, finished_at=? WHERE job_id=?", (finished, finished, old)
             )
     finally:
         database.close()
@@ -77,7 +90,7 @@ def seed(home: Path) -> None:
 def write_config(home: Path) -> Path:
     config = home / "config.toml"
     config.write_text(
-        f"""[daemon]\nhost = "127.0.0.1"\nport = {PORT}\nmax_jobs = 2\ndefault_profile = "e2e"\nask_timeout_s = 30\n\n[logging]\nlevel = "WARNING"\n\n[[targets]]\nid = "e2e"\nbackend = "claude"\nmodel = "e2e"\n\n[[targets]]\nid = "e2e-next"\nbackend = "claude"\nmodel = "e2e"\n\n[profiles.e2e]\nconsult = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nimplement = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nreview = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nother = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\n""",
+        f"""schema_version = 1\n\n[daemon]\nhost = "127.0.0.1"\nport = {PORT}\nmax_jobs = 2\ndefault_profile = "e2e"\nask_timeout_s = 30\n\n[logging]\nlevel = "WARNING"\n\n[[targets]]\nid = "e2e"\nbackend = "claude"\nmodel = "e2e"\n\n[[targets]]\nid = "e2e-next"\nbackend = "claude"\nmodel = "e2e"\n\n[profiles.seed]\nconsult = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\n\n[profiles.e2e]\nconsult = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nimplement = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nreview = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\nother = {{ targets = ["e2e", "e2e-next"], timeout_s = 30 }}\n""",
         encoding="utf-8",
     )
 

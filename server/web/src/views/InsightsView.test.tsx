@@ -5,11 +5,9 @@ import { DailyChart, fillDays, fixed, getXLabels, InsightsView, niceTicks } from
 
 const empty: StatsResponse = {
   days: 7,
-  currency: "USD",
   work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
-  failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+  failover_saves: { skipped_targets: 0, retries: 0, attempts_by_reason: {}, unknown_skipped_targets: 0, unknown_attempts: 0 },
   tokens: { by_backend: {}, by_model: {}, by_target: {} },
-  estimated_cost: { total: 0, by_model: {}, unpriced_models: [] },
 };
 
 const totals = (values: Partial<StatsResponse["tokens"]["by_model"][string]>) => ({
@@ -28,7 +26,6 @@ const none = totals({ jobs: 1 });
 
 const full: StatsResponse = {
   days: 7,
-  currency: "USD",
   work_delegated: {
     by_workflow: { consult: { succeeded: 1, failed: 1 }, implement: { failed: 1, succeeded: 1 } },
     by_state: { succeeded: 2, failed: 2 },
@@ -42,13 +39,12 @@ const full: StatsResponse = {
     success_rate: 0.5,
     daily: { "2026-11-09": { succeeded: 1, failed: 1 }, "2026-11-10": { succeeded: 3, failed: 0 } },
   },
-  failover_saves: { skipped_targets: 4, retries: 2, retries_after_failure: 1, unknown_skipped_targets: 1, unknown_attempts: 3 },
+  failover_saves: { skipped_targets: 4, retries: 2, attempts_by_reason: { initial: 9, retry: 2, fresh_session: 1, fallback: 4 }, unknown_skipped_targets: 1, unknown_attempts: 3 },
   tokens: {
     by_backend: { codex: gpt, claude, unassigned: none },
     by_model: { "gpt-x": gpt, "claude-y": claude, unassigned: none },
     by_target: { t1: gpt, t2: claude, unassigned: none },
   },
-  estimated_cost: { total: 0.010624999999999999, by_model: { "claude-y": 0.009585, "gpt-x": 0.00104 }, unpriced_models: ["unassigned"] },
 };
 
 const renderView = (props: Partial<Parameters<typeof InsightsView>[0]> = {}) => {
@@ -60,15 +56,14 @@ const renderView = (props: Partial<Parameters<typeof InsightsView>[0]> = {}) => 
 
 const kpi = (name: string) => screen.getByText(name, { selector: "dt" }).nextElementSibling;
 
-it("shows zeros and empty messages for empty data without an unpriced notice", () => {
+it("shows zeros and empty messages for empty data", () => {
   renderView({ stats: empty });
   expect(screen.getByRole("heading", { name: "Insights" })).toBeInTheDocument();
   expect(kpi("Jobs finished")).toHaveTextContent("0");
   expect(kpi("Success rate")).toHaveTextContent("0.0%");
   expect(screen.getByRole("group", { name: /Daily jobs finished/ })).toBeInTheDocument();
   expect(screen.getByText("No token usage in this window.")).toBeInTheDocument();
-  expect(screen.getByText("0.00 USD")).toBeInTheDocument();
-  expect(screen.queryByText(/Unpriced models/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Estimated cost" })).not.toBeInTheDocument();
   expect(screen.queryByRole("table", { name: "Jobs by profile, workflow, target, and state" })).not.toBeInTheDocument();
 });
 
@@ -110,10 +105,13 @@ it("shows the work delegated cards, a named daily chart, and its table fallback"
 
 it("shows failover saves with a note for unknown counts", () => {
   renderView();
-  expect(kpi("Failover saves")).toHaveTextContent("7");
+  expect(kpi("Failover saves")).toHaveTextContent("6");
   expect(kpi("Jobs saved by skipping a target")).toHaveTextContent("4");
   expect(kpi("Jobs saved by a same-target retry")).toHaveTextContent("2");
-  expect(kpi("Jobs saved by retrying a failed job")).toHaveTextContent("1");
+  expect(kpi("Initial attempts")).toHaveTextContent("9");
+  expect(kpi("Retry attempts")).toHaveTextContent("2");
+  expect(kpi("Fresh session attempts")).toHaveTextContent("1");
+  expect(kpi("Fallback attempts")).toHaveTextContent("4");
   expect(screen.getByText("Unknown for 1 job (skipped targets) and 3 jobs (attempts).")).toBeInTheDocument();
 });
 
@@ -138,23 +136,7 @@ it("shows token tables per model, backend, and target with cache ratio bars", ()
   expect(within(rows[1]).getByRole("meter", { name: "Cache hit ratio for gpt-x" })).toHaveAttribute("aria-valuenow", "40");
   expect(screen.getByRole("table", { name: "Tokens by backend" })).toBeInTheDocument();
   expect(screen.getByRole("table", { name: "Tokens by target" })).toBeInTheDocument();
-});
-
-it("shows the cost total, the per-model table, and the unpriced notice", () => {
-  renderView();
-  expect(screen.getByText("0.01 USD")).toBeInTheDocument();
-  const rows = within(screen.getByRole("table", { name: "Estimated cost by model" })).getAllByRole("row");
-  expect(
-    within(rows[1])
-      .getAllByRole("cell")
-      .map((cell) => cell.textContent),
-  ).toEqual(["claude-y", "0.0096 USD"]);
-  expect(
-    within(rows[2])
-      .getAllByRole("cell")
-      .map((cell) => cell.textContent),
-  ).toEqual(["gpt-x", "0.0010 USD"]);
-  expect(screen.getByText("Unpriced models: unassigned. Their usage is left out of the estimate.")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Estimated cost" })).not.toBeInTheDocument();
 });
 
 it("marks the current window and reports a window change", () => {
@@ -172,11 +154,13 @@ it("navigates back to the console", () => {
   expect(onNavigate).toHaveBeenCalledWith("/dashboard/");
 });
 
-it("counts a job that skipped several targets once and totals the three counters", () => {
-  renderView({ stats: { ...full, failover_saves: { skipped_targets: 1, retries: 0, retries_after_failure: 2, unknown_skipped_targets: 0, unknown_attempts: 0 } } });
+it("counts a job that skipped several targets once and totals the two counters", () => {
+  renderView({ stats: { ...full, failover_saves: { skipped_targets: 1, retries: 0, attempts_by_reason: { retry: 2 }, unknown_skipped_targets: 0, unknown_attempts: 0 } } });
   expect(kpi("Jobs saved by skipping a target")).toHaveTextContent(/^1$/);
   expect(kpi("Jobs saved by a same-target retry")).toHaveTextContent(/^0$/);
-  expect(kpi("Failover saves")).toHaveTextContent(/^3$/);
+  expect(kpi("Failover saves")).toHaveTextContent(/^1$/);
+  expect(kpi("Initial attempts")).toHaveTextContent(/^0$/);
+  expect(kpi("Retry attempts")).toHaveTextContent(/^2$/);
   expect(screen.queryByText("Targets skipped")).not.toBeInTheDocument();
 });
 
@@ -268,12 +252,11 @@ it("formats fixed-point numbers like Python, rounding exact ties to even", () =>
   expect(fixed(0, 2)).toBe("0.00");
 });
 
-it("shows worker hours and the cost total with Python tie rounding", () => {
+it("shows worker hours with Python tie rounding", () => {
   renderView({
-    stats: { ...full, work_delegated: { ...full.work_delegated, worker_hours: 0.125 }, estimated_cost: { total: 0.125, by_model: {}, unpriced_models: [] } },
+    stats: { ...full, work_delegated: { ...full.work_delegated, worker_hours: 0.125 } },
   });
   expect(kpi("Worker hours")).toHaveTextContent(/^0\.12$/);
-  expect(screen.getByText("0.12 USD")).toBeInTheDocument();
 });
 
 it("shows the success rate percent with Python tie rounding", () => {

@@ -1,14 +1,14 @@
 
 import asyncio
-import threading
 from pathlib import Path
 
 import pytest
 from coding_agent_cli import Capabilities, Diagnostic, Outcome, Result, Usage, events
 
-from refract import drivers
+from refract.runner import drivers
 from refract.config import TargetConfig
-from refract.drivers import (
+from refract.scheduling.cancel import CancelEvent
+from refract.runner.drivers import (
     DriverRegistry,
     DriverResult,
     _event_dict,
@@ -78,11 +78,6 @@ def test_normalize_success_ignores_warnings() -> None:
     result = _normalize(Result(outcome=Outcome.SUCCESS, warnings=(Diagnostic(code="warning", message="w"),)))
 
     assert (result.outcome, result.error_code, result.error) == ("SUCCESS", "", "")
-
-
-@pytest.mark.parametrize("removed", ["no_agent_messages", "fatal_backend", "bad_cd", "request_fatal"])
-def test_removed_codes_are_not_produced_by_the_mapping(removed) -> None:
-    assert removed not in {code for _, code, _ in _OUTCOME_CASES}
 
 
 def test_normalize_failure_without_diagnostic_still_fails() -> None:
@@ -322,7 +317,7 @@ def _captured_request(monkeypatch, target: TargetConfig, **call) -> object:
     monkeypatch.setattr(drivers.coding_agent_cli, "run", fake_run)
     asyncio.run(DriverRegistry().execute(
         target=target, prompt="p", cwd=Path("."), session_id=call.get("session_id", ""),
-        timeout_s=call.get("timeout_s", 0), cancel_event=threading.Event(),
+        timeout_s=call.get("timeout_s", 0), cancel_event=CancelEvent(),
     ))
     return seen[0]
 
@@ -382,7 +377,7 @@ def test_codex_target_is_not_rejected_for_reasoning(tmp_path, settings) -> None:
 
     result = asyncio.run(DriverRegistry().execute(
         target=target, prompt="p", cwd=tmp_path / "missing", session_id="", timeout_s=0,
-        cancel_event=threading.Event(),
+        cancel_event=CancelEvent(),
     ))
 
     assert result.error_code == "bad_cwd"
@@ -399,3 +394,18 @@ def test_codex_target_fields_follow_target_args(monkeypatch) -> None:
 
     assert (request.model, request.reasoning) == (None, None)
     assert request.args == ("--yolo", "-c", "web_search=live", "--model", "m", "-c", 'model_reasoning_effort="high"')
+
+
+@pytest.mark.asyncio
+async def test_mirror_cancel_wakes_without_polling(monkeypatch) -> None:
+    async def no_sleep(*_args, **_kwargs) -> None:
+        raise AssertionError("cancel mirroring must not poll")
+
+    monkeypatch.setattr(drivers.asyncio, "sleep", no_sleep)
+    source, target = CancelEvent(), asyncio.Event()
+    mirror = asyncio.create_task(drivers._mirror_cancel(source, target))
+    await asyncio.wait({mirror}, timeout=0.02)
+    assert not target.is_set()
+    source.set()
+    await asyncio.wait_for(mirror, 1)
+    assert target.is_set()

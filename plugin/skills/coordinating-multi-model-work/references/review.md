@@ -63,8 +63,9 @@ blocking findings, set handover `BLOCKED` and return them to the user.
 
 When a `succeeded` job returns output the review cannot use, inspect its
 partial local effects first. Then follow Recovery in
-[tool-contract.md](tool-contract.md#recovery): call `retry(job_id)` for the next
-target, or `retry(job_id, target=X)` to pin one. Require ERP only where the
+[tool-contract.md](tool-contract.md#recovery): call `submit(from_job=<job id>)` for the
+next target, or `submit(from_job=<job id>, target=X)` to pin one. The server
+already retries and falls back on its own when `replay_safe`. Require ERP only where the
 workflow requires it.
 
 ## Finalize phase

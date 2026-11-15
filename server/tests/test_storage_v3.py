@@ -1,4 +1,4 @@
-"""Phase 5 storage contract: fresh v3 schema, v2 retirement, flat token columns, result files."""
+"""Storage contract through the facade: schema v1, old-database retirement, token columns, result files."""
 
 from __future__ import annotations
 
@@ -12,88 +12,34 @@ from pathlib import Path
 
 import pytest
 
-import refract.database as database_module
-from refract.database import Database
+from refract.store.database import Database
 
-V3_TABLES = {"projects", "jobs", "sessions", "target_sessions", "target_health", "cards", "card_jobs", "card_moves", "job_metrics", "telemetry_outbox"}
-V3_COLUMNS = {
-    "job_metrics": {"job_id", "finished_at", "profile", "workflow", "target", "backend", "model", "state", "failure_kind", "duration_ms", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write", "attempts", "skipped_targets", "retry_of"},
-    "telemetry_outbox": {"id", "event_key", "created_at", "payload", "send_attempts", "next_attempt_at"},
+V1_TABLES = {
+    "projects", "jobs", "attempts", "questions", "session_routes", "backend_sessions", "target_health",
+    "cards", "card_jobs", "card_moves",
+}
+V1_COLUMNS = {
     "projects": {"id", "root", "created_at"},
     "jobs": {
-        "id", "project_id", "workflow", "profile", "target", "session", "fresh", "prompt", "state",
-        "retry_of", "failure_kind", "error", "model", "duration_ms", "pgid",
-        "tok_context_used", "tok_context_window", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write",
-        "created_at", "started_at", "finished_at", "updated_at", "execution_plan_json",
+        "id", "project_id", "workflow", "profile", "target_pin", "session", "fresh", "from_job", "prompt", "state",
+        "failure_kind", "error", "next_target", "result", "events_committed", "content_pruned", "pgid", "plan_json",
+        "created_at", "started_at", "finished_at", "updated_at",
     },
-    "sessions": {"project_id", "session", "workflow", "sticky_target", "updated_at"},
-    "target_sessions": {"project_id", "session", "workflow", "target_key", "backend_session_id", "updated_at"},
+    "attempts": {
+        "id", "job_id", "seq", "reason", "target", "backend", "model", "state", "failure_kind", "replay_safe",
+        "started_at", "finished_at", "duration_ms", "tok_context_used", "tok_context_window", "tok_input",
+        "tok_output", "tok_cache_read", "tok_cache_write",
+    },
+    "questions": {"id", "job_id", "attempt_id", "text", "state", "answer", "asked_at", "answered_at"},
+    "session_routes": {"project_id", "session", "workflow", "sticky_target", "updated_at"},
+    "backend_sessions": {"project_id", "session", "workflow", "target_key", "backend_session_id", "updated_at"},
+    "target_health": {
+        "target_id", "consecutive_failures", "circuit_open_until", "last_success_at", "cooldown_s", "probe_job_id",
+    },
     "cards": {"id", "project_id", "title", "body", "state", "created_at", "updated_at"},
     "card_jobs": {"card_id", "job_id", "linked_at"},
     "card_moves": {"id", "card_id", "from_state", "to_state", "note", "at"},
 }
-SCHEMA_18_DDL = """
-CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
-    root TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE jobs (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id),
-    workflow TEXT NOT NULL,
-    profile TEXT NOT NULL,
-    target TEXT NOT NULL DEFAULT '',
-    session TEXT NOT NULL,
-    fresh INTEGER NOT NULL DEFAULT 0,
-    prompt TEXT NOT NULL,
-    state TEXT NOT NULL,
-    retry_of TEXT NOT NULL DEFAULT '',
-    failure_kind TEXT,
-    error TEXT NOT NULL DEFAULT '',
-    model TEXT,
-    duration_ms INTEGER,
-    pgid INTEGER,
-    tok_context_used INTEGER,
-    tok_context_window INTEGER,
-    tok_input INTEGER,
-    tok_output INTEGER,
-    tok_cache_read INTEGER,
-    tok_cache_write INTEGER,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    finished_at TEXT,
-    updated_at TEXT NOT NULL,
-    execution_plan_json TEXT NOT NULL
-);
-CREATE TABLE sessions (
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    session TEXT NOT NULL,
-    workflow TEXT NOT NULL,
-    sticky_target TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (project_id, session, workflow)
-);
-CREATE TABLE target_sessions (
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    session TEXT NOT NULL,
-    workflow TEXT NOT NULL,
-    target_key TEXT NOT NULL,
-    backend_session_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (project_id, session, workflow, target_key)
-);
-CREATE TABLE target_health (
-    target_id TEXT PRIMARY KEY,
-    consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    circuit_open_until TEXT NOT NULL DEFAULT '',
-    last_success_at TEXT NOT NULL DEFAULT '',
-    cooldown_s INTEGER NOT NULL DEFAULT 0,
-    probe_job_id TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX jobs_state_idx ON jobs(state, created_at);
-CREATE INDEX jobs_project_idx ON jobs(project_id, updated_at);
-"""
 TOKEN_COLUMNS = ("tok_context_used", "tok_context_window", "tok_input", "tok_output", "tok_cache_read", "tok_cache_write")
 
 
@@ -123,46 +69,6 @@ def _crash_snapshot(source_dir: Path, target: Path) -> None:
     writer.close()
 
 
-def _schema_18(path: Path) -> str:
-    """Create a schema 18 database holding one job; return the job ID."""
-    job_id = str(uuid.uuid4())
-    with closing(sqlite3.connect(path)) as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.executescript(SCHEMA_18_DDL)
-        connection.execute("INSERT INTO projects(id, root, created_at) VALUES ('p1', '/r', 't0')")
-        connection.execute(
-            "INSERT INTO jobs(id, project_id, workflow, profile, prompt, state, session, created_at, updated_at, execution_plan_json) "
-            "VALUES (?, 'p1', 'implement', 'default', 'hello', 'succeeded', 's', 't1', 't2', '{}')",
-            (job_id,),
-        )
-        connection.execute(
-            "UPDATE jobs SET target='target-a', execution_plan_json=? WHERE id=?",
-            ('{"targets":[{"id":"target-a","backend":"codex"}]}', job_id),
-        )
-        connection.execute(
-            "INSERT INTO jobs(id, project_id, workflow, profile, prompt, state, session, created_at, updated_at, execution_plan_json) "
-            "VALUES ('queued-job', 'p1', 'implement', 'default', 'hello', 'queued', 's2', 't1', 't2', '{}')"
-        )
-        connection.execute("PRAGMA user_version=18")
-        connection.commit()
-    return job_id
-
-
-def _schema_19(path: Path) -> str:
-    job_id = _schema_18(path)
-    with closing(sqlite3.connect(path)) as connection:
-        for statement in database_module._CARD_DDL:
-            connection.execute(statement)
-        connection.execute("PRAGMA user_version=19")
-        connection.commit()
-    return job_id
-
-
-def _job_rows(path: Path) -> list[tuple]:
-    with closing(sqlite3.connect(path)) as connection:
-        return connection.execute("SELECT * FROM jobs ORDER BY id").fetchall()
-
-
 def _user_version(path: Path) -> int:
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute("PRAGMA user_version").fetchone()[0]
@@ -173,12 +79,12 @@ def _new_job(database: Database, tmp_path: Path) -> str:
     job_id = str(uuid.uuid4())
     database.create_job(
         job_id=job_id, project_id=project.id, workflow="implement", profile="default",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
     return job_id
 
 
-def test_v2_database_is_renamed_with_wal_and_shm_and_fresh_schema_created(tmp_path: Path) -> None:
+def test_old_database_is_renamed_with_wal_and_shm_and_fresh_schema_created(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     path = tmp_path / "refract.db"
@@ -188,48 +94,45 @@ def test_v2_database_is_renamed_with_wal_and_shm_and_fresh_schema_created(tmp_pa
     Database(path)
 
     for suffix, content in original.items():
-        assert Path(f"{path}{suffix}.v2.bak").read_bytes() == content
-    assert _tables(path) == V3_TABLES
+        assert Path(f"{path}.16.bak{suffix}").read_bytes() == content
+    assert _tables(path) == V1_TABLES
     restored = tmp_path / "restored"
     restored.mkdir()
     for suffix in ("", "-wal", "-shm"):
-        shutil.copyfile(f"{path}{suffix}.v2.bak", restored / f"old.db{suffix}")
+        shutil.copyfile(f"{path}.16.bak{suffix}", restored / f"old.db{suffix}")
     with sqlite3.connect(restored / "old.db") as connection:
         assert connection.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 3
 
 
-def test_v3_database_is_reopened_untouched(tmp_path: Path) -> None:
+def test_v1_database_is_reopened_untouched(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     job_id = _new_job(Database(path), tmp_path)
 
     reopened = Database(path)
 
-    assert not list(tmp_path.glob("*.v2.bak"))
+    assert not list(tmp_path.glob("*.bak*"))
     assert reopened.job_record(job_id) is not None
 
 
-def test_newer_schema_database_is_refused_without_changes(tmp_path: Path) -> None:
+def test_newer_schema_database_is_renamed_with_its_bytes_intact(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute("CREATE TABLE future (id INTEGER)")
         connection.execute("PRAGMA user_version=999")
     before = path.read_bytes()
-    try:
-        Database(path)
-    except ValueError as exc:
-        assert "newer" in str(exc)
-    else:
-        raise AssertionError("a newer schema must be refused")
-    assert path.read_bytes() == before
-    assert not list(tmp_path.glob("*.v2.bak"))
+
+    Database(path).close()
+
+    assert (tmp_path / "refract.db.999.bak").read_bytes() == before
+    assert _user_version(path) == 1
 
 
-def test_fresh_schema_has_exact_v3_tables_and_columns(tmp_path: Path) -> None:
+def test_fresh_schema_has_exact_v1_tables_and_columns(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     Database(path)
 
-    assert _tables(path) == V3_TABLES
-    for table, columns in V3_COLUMNS.items():
+    assert _tables(path) == V1_TABLES
+    for table, columns in V1_COLUMNS.items():
         assert _columns(path, table) == columns, table
 
 
@@ -288,124 +191,18 @@ def test_result_file_is_private_and_pruning_deletes_job_stream_and_result(tmp_pa
     database.finish_job(job_id, "succeeded", text="answer", target="primary")
     assert os.name == "nt" or database.result_path(job_id).stat().st_mode & 0o777 == 0o600  # file modes are POSIX-only
 
-    database.prune_history("9999-01-01T00:00:00Z")
+    database.prune_retention(content_before="9999-01-01T00:00:00Z", rows_before="9999-01-01T00:00:00Z")
 
     assert database.job_record(job_id) is None
     assert not database.stream_path(job_id).exists()
     assert not database.result_path(job_id).exists()
 
 
-def test_schema_18_database_upgrades_to_21_and_keeps_job_rows(tmp_path: Path) -> None:
-    path = tmp_path / "refract.db"
-    job_id = _schema_18(path)
-    before = _job_rows(path)
-
-    Database(path).close()
-
-    assert _user_version(path) == 21
-    assert _job_rows(path) == before
-    assert before[0][0] == job_id
-    with closing(sqlite3.connect(path)) as connection:
-        metric = connection.execute(
-            "SELECT job_id, finished_at, attempts, skipped_targets FROM job_metrics"
-        ).fetchone()
-    assert metric == (job_id, "t2", None, None)
-    with closing(sqlite3.connect(path)) as connection:
-        all_metrics = connection.execute("SELECT job_id FROM job_metrics").fetchall()
-        resolved = connection.execute(
-            "SELECT target, backend FROM job_metrics WHERE job_id=?", (job_id,),
-        ).fetchone()
-    assert all_metrics == [(job_id,)]
-    assert resolved == ("target-a", "codex")
-    assert _tables(path) == V3_TABLES
-
-
-def test_schema_19_database_backfills_terminal_jobs_and_skips_nonterminal(tmp_path: Path) -> None:
-    path = tmp_path / "refract.db"
-    job_id = _schema_19(path)
-
-    Database(path).close()
-
-    assert _user_version(path) == 21
-    with closing(sqlite3.connect(path)) as connection:
-        rows = connection.execute(
-            "SELECT job_id, finished_at, backend, attempts, skipped_targets FROM job_metrics"
-        ).fetchall()
-    assert rows == [(job_id, "t2", "codex", None, None)]
-
-
-def test_failed_schema_19_migration_rolls_back_without_new_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    path = tmp_path / "refract.db"
-    _schema_19(path)
-    monkeypatch.setattr(database_module, "_METRICS_DDL", (*database_module._METRICS_DDL[:1], "CREATE TABLE broken ("))
-
-    with pytest.raises(sqlite3.Error):
-        Database(path)
-
-    assert _user_version(path) == 19
-    assert "job_metrics" not in _tables(path)
-    assert "telemetry_outbox" not in _tables(path)
-
-
-def test_failed_schema_20_step_from_schema_18_leaves_schema_18_without_new_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    path = tmp_path / "refract.db"
-    _schema_18(path)
-    before = _job_rows(path)
-    monkeypatch.setattr(database_module, "_METRICS_DDL", (*database_module._METRICS_DDL[:1], "CREATE TABLE broken ("))
-
-    with pytest.raises(sqlite3.Error):
-        Database(path)
-
-    assert _user_version(path) == 18
-    assert _job_rows(path) == before
-    assert not {"cards", "job_metrics", "telemetry_outbox"} & set(_tables(path))
-
-
-def test_schema_18_upgrade_succeeds_with_existing_backup_and_creates_none(tmp_path: Path) -> None:
-    path = tmp_path / "refract.db"
-    _schema_18(path)
-    (tmp_path / "refract.db.v2.bak").write_bytes(b"old")
-
-    Database(path).close()
-
-    assert _user_version(path) == 21
-    assert sorted(p.name for p in tmp_path.glob("*.v2.bak")) == ["refract.db.v2.bak"]
-    assert (tmp_path / "refract.db.v2.bak").read_bytes() == b"old"
-
-
-def test_failed_schema_18_migration_rolls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    path = tmp_path / "refract.db"
-    _schema_18(path)
-    before = _job_rows(path)
-    first = database_module._CARD_DDL[0]
-    monkeypatch.setattr(database_module, "_CARD_DDL", (first, "CREATE TABLE broken ("))
-
-    with pytest.raises(sqlite3.Error):
-        Database(path)
-
-    assert _user_version(path) == 18
-    assert _job_rows(path) == before
-    assert "cards" not in _tables(path)
-
-
-def test_schema_21_database_reopens_unchanged(tmp_path: Path) -> None:
-    path = tmp_path / "refract.db"
-    _schema_18(path)
-    Database(path).close()
-    before = _job_rows(path)
-
-    Database(path).close()
-
-    assert _user_version(path) == 21
-    assert _job_rows(path) == before
-    assert not list(tmp_path.glob("*.v2.bak"))
-
-
-def test_fresh_database_reports_schema_21(tmp_path: Path) -> None:
+def test_fresh_database_reports_schema_v1(tmp_path: Path) -> None:
     path = tmp_path / "refract.db"
     Database(path).close()
 
-    assert _user_version(path) == 21
+    assert _user_version(path) == 1
 
 
 def test_cards_survive_close_and_reopen(tmp_path: Path) -> None:

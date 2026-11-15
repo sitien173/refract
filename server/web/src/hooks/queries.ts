@@ -16,6 +16,10 @@ import {
   type TargetsResponse,
 } from "../api";
 
+/** Fallback refetch interval; the server event stream triggers the real refreshes. */
+export const FALLBACK_POLL_MS = 30_000;
+const ERROR_POLL_MS = 5000;
+
 export function useJobDetail(
   id: string | null,
   options?: {
@@ -38,7 +42,7 @@ export function useJobDetail(
       if (data && isTerminalJobState(data.state)) {
         return false;
       }
-      return q.state.error ? 5000 : 1000;
+      return q.state.error ? ERROR_POLL_MS : FALLBACK_POLL_MS;
     },
   });
 
@@ -76,7 +80,7 @@ export function useBoardCards(
     queryKey: ["cards", project ?? ""],
     queryFn: ({ signal }) => load(project, signal),
     enabled,
-    refetchInterval: (q) => (q.state.error ? 5000 : 1000),
+    refetchInterval: (q) => (q.state.error ? ERROR_POLL_MS : FALLBACK_POLL_MS),
   });
 }
 
@@ -97,7 +101,7 @@ export function useCardDetail(
       return load(cardId, signal);
     },
     enabled: Boolean(cardId),
-    refetchInterval: (q) => (q.state.error ? 5000 : 1000),
+    refetchInterval: (q) => (q.state.error ? ERROR_POLL_MS : FALLBACK_POLL_MS),
   });
 
   useEffect(() => {

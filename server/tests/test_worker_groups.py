@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from coding_agent_cli._process import run_process
-from refract.drivers import DriverResult
+from refract.runner.drivers import DriverResult
 from refract.runtime import Runtime
 from tests.orchestration_helpers import FakeDrivers, config, register_project, repository
 
@@ -47,7 +47,7 @@ def _spawn_group(env_job_id: str | None) -> subprocess.Popen[bytes]:
 def _running_job(runtime: Runtime, root: Path, pgid: int, job_id: str) -> str:
     project = register_project(runtime, str(root))
     runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="consult", profile="balanced",
-                                prompt="p", execution_plan_json="{}", session="s")
+                                prompt="p", plan_json="{}", session="s")
     with runtime.database._connection:
         runtime.database._connection.execute("UPDATE jobs SET state='running', pgid=? WHERE id=?", (pgid, job_id))
     return job_id

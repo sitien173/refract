@@ -63,7 +63,7 @@ After the last phase integrates or requeues, set `wave_base: null` and `wave: []
 ## Waiting
 
 While more than one wave job is active, call `wait` round-robin in plan order
-with `timeout_s=60`. Answer each `result.pending_question` immediately. Up to
+with `timeout_s=60`. Answer each `pending_question` immediately. Up to
 four active jobs keeps every question inside the default 300-second ask
 timeout. With more, a question can expire unanswered; the worker usually
 returns `BLOCKED` and normal handling applies. With one active job, the

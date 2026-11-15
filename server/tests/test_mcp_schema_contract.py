@@ -5,9 +5,10 @@ import pytest
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from refract.drivers import DriverResult
+from refract.runner.drivers import DriverResult
 from refract.models import FAILURE_KINDS
-from refract.server import _raw_argument_error, create_mcp
+from refract.api.mcp.app import create_mcp
+from refract.api.mcp.responses import _raw_argument_error
 from tests.orchestration_helpers import FakeDrivers, repository
 from tests.test_server import _connected_client
 
@@ -41,11 +42,11 @@ async def test_pinned_sdk_tool_error_prefix():
 
 
 TOOL_SCHEMAS = {
-    "submit": ({"path", "workflow", "prompt", "profile", "session", "fresh"}, {"path", "workflow", "prompt"}),
-    "wait": ({"job_id", "timeout_s"}, {"job_id"}),
+    "submit": ({"path", "workflow", "prompt", "profile", "session", "fresh", "from_job", "target"}, {"path"}),
+    "get": ({"job_id"}, {"job_id"}),
+    "wait": ({"job_ids", "timeout_s"}, {"job_ids"}),
     "answer": ({"job_id", "answer"}, {"job_id", "answer"}),
     "cancel": ({"job_id"}, {"job_id"}),
-    "retry": ({"job_id", "target"}, {"job_id"}),
     "list": ({"path"}, {"path"}),
     "card_create": ({"path", "title", "body", "job_ids"}, {"path", "title"}),
     "card_move": ({"card_id", "state", "job_ids", "note"}, {"card_id", "state"}),
@@ -75,8 +76,11 @@ def _bare(schema):
     if isinstance(schema, dict):
         return {key: _bare(value) for key, value in schema.items() if key not in {"description", "title"} or isinstance(value, dict)}
     return schema
-JOB_KEYS = {"id", "project", "workflow", "profile", "target", "session", "state", "retry_of", "created_at", "updated_at"}
-RESULT_KEYS = {"text", "truncated", "result_path", "pending_question", "failure_kind", "next_target", "model", "duration_ms", "tokens"}
+JOB_KEYS = {"id", "project", "workflow", "profile", "target_id", "session", "state", "from_job", "created_at", "updated_at"}
+WAIT_KEYS = {
+    "job", "result", "truncated", "result_path", "pending_question", "failure_kind", "next_target", "model",
+    "duration_ms", "tokens",
+}
 TOKEN_KEYS = {"context_used", "context_window", "input", "output", "cache_read", "cache_write"}
 ERROR_KEYS = {"code", "message", "next_action", "retry_after_s"}
 REMOVED_KEYS = {
@@ -126,7 +130,8 @@ async def test_mcp_surface_is_exactly_nine_tools_with_exact_input_schemas():
         assert set(schema["properties"]) == properties, name
         assert set(schema.get("required", [])) == required, name
         assert _raw_argument_error(schema, {**{key: "x" for key in required}, "unknown": 1}), name
-    assert tools["submit"].input_schema["properties"]["fresh"]["default"] is False
+    assert tools["submit"].input_schema["properties"]["fresh"]["default"] is None
+    assert tools["wait"].input_schema["properties"]["job_ids"]["type"] == "array"
     assert tools["wait"].input_schema["properties"]["timeout_s"]["default"] == 3600
     assert tools["answer"].input_schema["properties"]["answer"]["maxLength"] == 8192
     for name, properties in CARD_INPUT_SCHEMAS.items():
@@ -136,7 +141,7 @@ async def test_mcp_surface_is_exactly_nine_tools_with_exact_input_schemas():
 
 def test_failure_kinds_match_design():
     assert set(FAILURE_KINDS) == {
-        "cancelled", "circuit_open", "replay_blocked", "context_overflow", "request_fatal", "target_fatal", "transient",
+        "cancelled", "circuit_open", "context_overflow", "request_fatal", "target_fatal", "transient",
     }
 
 
@@ -156,21 +161,19 @@ async def test_list_submit_wait_from_subdirectory_returns_exact_v3_fields(tmp_pa
         job = submitted["job"]
         assert set(job) == JOB_KEYS
         assert job["project"] == root.resolve().as_posix()
-        assert job["retry_of"] in {"", None}
-        waited = await _call(client, "wait", {"job_id": job["id"], "timeout_s": 10})
-        assert set(waited) == {"job", "result"}
+        assert job["from_job"] in {"", None}
+        waited = await _call(client, "wait", {"job_ids": [job["id"]], "timeout_s": 10})
+        assert set(waited) == WAIT_KEYS
         assert set(waited["job"]) == JOB_KEYS
         assert waited["job"]["state"] == "succeeded"
-        assert waited["job"]["target"] == "primary"
-        result = waited["result"]
-        assert set(result) == RESULT_KEYS
-        assert set(result["tokens"]) == TOKEN_KEYS
-        assert result["text"] == "done"
-        assert result["truncated"] is False
-        assert result["failure_kind"] is None
-        assert result["pending_question"] is None
-        assert result["model"] == "model-1"
-        assert Path(result["result_path"]).read_text(encoding="utf-8") == "done"
+        assert waited["job"]["target_id"] == "primary"
+        assert set(waited["tokens"]) == TOKEN_KEYS
+        assert waited["result"] == "done"
+        assert waited["truncated"] is False
+        assert waited["result_path"] is None
+        assert waited["failure_kind"] is None
+        assert waited["pending_question"] is None
+        assert waited["model"] == "model-1"
         relisted = await _call(client, "list", {"path": str(root)})
         assert [item["id"] for item in relisted["recent"]] == [job["id"]]
         assert set(relisted["recent"][0]) == JOB_KEYS
@@ -194,32 +197,32 @@ async def test_long_result_is_truncated_with_full_text_at_result_path(tmp_path, 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         runtime.drivers = TextDrivers(full)
         job = (await _call(client, "submit", {"path": str(root), "workflow": "consult", "prompt": "long"}))["job"]
-        result = (await _call(client, "wait", {"job_id": job["id"], "timeout_s": 10}))["result"]
-        assert result["truncated"] is True
-        assert 0 < len(result["text"]) < len(full)
-        assert full.startswith(result["text"])
-        assert Path(result["result_path"]).read_text(encoding="utf-8") == full
+        waited = await _call(client, "wait", {"job_ids": [job["id"]], "timeout_s": 10})
+        assert waited["truncated"] is True
+        assert 0 < len(waited["result"]) < len(full)
+        assert full.startswith(waited["result"])
+        assert Path(waited["result_path"]).read_text(encoding="utf-8") == full
 
 
 @pytest.mark.asyncio
-async def test_failed_job_reports_transient_kind_and_retry_returns_new_job(tmp_path, monkeypatch):
+async def test_failed_job_reports_transient_kind_and_submit_from_job_returns_new_job(tmp_path, monkeypatch):
     root = repository(tmp_path)
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         runtime.drivers = TextDrivers(outcome="RETRYABLE")
         source = (await _call(client, "submit", {"path": str(root), "workflow": "consult", "prompt": "fail"}))["job"]
-        failed = await _call(client, "wait", {"job_id": source["id"], "timeout_s": 10})
+        failed = await _call(client, "wait", {"job_ids": [source["id"]], "timeout_s": 10})
         assert failed["job"]["state"] == "failed"
-        assert failed["result"]["failure_kind"] == "transient"
-        assert failed["result"]["next_target"] is None
+        assert failed["failure_kind"] == "transient"
+        assert failed["next_target"] is None
         runtime.drivers = TextDrivers()
-        retried = await _call(client, "retry", {"job_id": source["id"], "target": "primary"})
+        retried = await _call(client, "submit", {"path": str(root), "from_job": source["id"], "target": "primary"})
         assert set(retried) == {"job"}
         assert set(retried["job"]) == JOB_KEYS
         assert retried["job"]["id"] != source["id"]
-        assert retried["job"]["retry_of"] == source["id"]
-        done = await _call(client, "wait", {"job_id": retried["job"]["id"], "timeout_s": 10})
+        assert retried["job"]["from_job"] == source["id"]
+        done = await _call(client, "wait", {"job_ids": [retried["job"]["id"]], "timeout_s": 10})
         assert done["job"]["state"] == "succeeded"
-        unknown = await _call(client, "retry", {"job_id": source["id"], "target": "missing"})
+        unknown = await _call(client, "submit", {"path": str(root), "from_job": source["id"], "target": "missing"})
         assert unknown["error"]["code"] == "invalid_request"
         assert "primary" in unknown["error"]["message"]
 
@@ -230,11 +233,12 @@ async def test_cancel_and_answer_return_job_or_compact_error(tmp_path, monkeypat
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         runtime.drivers = TextDrivers()
         job = (await _call(client, "submit", {"path": str(root), "workflow": "consult", "prompt": "hi"}))["job"]
-        await _call(client, "wait", {"job_id": job["id"], "timeout_s": 10})
+        await _call(client, "wait", {"job_ids": [job["id"]], "timeout_s": 10})
         cancelled = await _call(client, "cancel", {"job_id": job["id"]})
-        assert set(cancelled) == {"job"}
+        assert set(cancelled) == {"job", "cancel_status"}
+        assert cancelled["cancel_status"] == "already_terminal"
         assert set(cancelled["job"]) == JOB_KEYS
         answered = await _call(client, "answer", {"job_id": job["id"], "answer": "yes"})
         assert answered["error"]["code"] == "invalid_state"
-        missing = await _call(client, "wait", {"job_id": "missing", "timeout_s": 0})
+        missing = await _call(client, "wait", {"job_ids": ["missing"], "timeout_s": 0})
         assert missing["error"]["code"] == "unknown_job"

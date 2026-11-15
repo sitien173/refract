@@ -6,18 +6,20 @@ from types import SimpleNamespace
 import pytest
 
 from refract.config import load_config
-from refract.database import Database
-from refract.drivers import DriverResult
+from refract.store.database import Database
+from refract.runner.drivers import DriverResult
 from refract.runtime import Runtime
-from refract.server import list_jobs, submit, wait
-from refract.workers import run_sync
+from refract.api.mcp.tools import list_jobs, submit, wait
+from refract.store.pool import run_sync
 from tests.orchestration_helpers import git
 
 
 @pytest.mark.asyncio
 async def test_runtime_tools_and_runner_never_query_sqlite_on_loop(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
-    path.write_text('''[daemon]
+    path.write_text('''schema_version = 1
+
+[daemon]
 default_profile = "test"
 [[targets]]
 id = "a"
@@ -61,10 +63,10 @@ consult = ["a"]
         await runtime.start()
         assert probes == ["a"]
         assert json.loads(await list_jobs(str(root), ctx))["profiles"]["default"] == "test"
-        submitted = json.loads(await submit(str(root), "consult", "hello", ctx))["job"]
+        submitted = json.loads(await submit(str(root), ctx, workflow="consult", prompt="hello"))["job"]
         completed = await runtime.wait(submitted["id"], 5)
         assert completed.state == "succeeded"
-        assert json.loads(await wait(submitted["id"], ctx))["result"]["text"] == "done"
+        assert json.loads(await wait([submitted["id"]], ctx))["result"] == "done"
         assert json.loads(await list_jobs(str(root), ctx))["recent"][0]["id"] == submitted["id"]
     finally:
         await runtime.close()

@@ -18,12 +18,12 @@ import pytest
 from coding_agent_cli import Capabilities
 
 from refract.config import NotificationsConfig, RetryPolicy, TargetConfig, TargetSelection
-from refract.database import Database
-from refract.drivers import DriverRegistry, DriverResult
-from refract.planning import execution_plan_data, resolve_execution_plan, target_execution_key
+from refract.store.database import Database
+from refract.runner.drivers import DriverRegistry, DriverResult
+from refract.runner.planning import execution_plan_data, resolve_execution_plan, target_execution_key
 from refract.runtime import OrchestrationError, Runtime
-from refract.execution import TargetExecutor
-from refract.scheduler import CancelEvent
+from refract.runner.attempts import TargetExecutor
+from refract.scheduling.cancel import CancelEvent
 from refract.workflows import get_workflow
 from tests.claude_cli import stub_claude
 from tests.cli_stub import stub_cli
@@ -65,7 +65,7 @@ async def test_legacy_snapshot_ignores_current_target_environment(tmp_path: Path
     runtime.target_executor.environment_resolver = tracking_resolver
     runtime.database.create_job(
         job_id="legacy-env-snapshot", project_id=project.id, workflow="implement",
-        profile="balanced", prompt="legacy", execution_plan_json=json.dumps(plan_data),
+        profile="balanced", prompt="legacy", plan_json=json.dumps(plan_data),
         session="legacy",
     )
     received: list[dict[str, str]] = []
@@ -140,7 +140,7 @@ async def test_queued_restart_binds_current_project_environment(tmp_path: Path) 
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     runtime.database.create_job(
         job_id="queued-env-restart", project_id=project.id, workflow="implement",
-        profile="balanced", prompt="restart", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        profile="balanced", prompt="restart", plan_json=json.dumps(execution_plan_data(plan)),
         session="restart",
     )
     runtime.database.close()
@@ -192,7 +192,7 @@ async def test_explicit_retry_rebinds_rotated_project_environment(tmp_path: Path
         submitted = await runtime.submit(project.id, "implement", "rotate")
         assert (await runtime.wait(submitted.job_id, 10)).state == "failed"
         project_config.write_text('[[targets]]\nid = "primary"\nenv = { ROTATION = "second" }\n', encoding="utf-8")
-        retried = await runtime.retry(submitted.job_id, target="primary")
+        retried = await runtime.submit_from_job(submitted.job_id, target="primary")
         assert (await runtime.wait(retried.job_id, 10)).state == "succeeded"
         assert runtime.database.job(submitted.job_id).state == "failed"
         assert received == ["first", "second"]
@@ -214,7 +214,7 @@ async def test_cancellation_during_environment_resolution_releases_probe(tmp_pat
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     runtime.database.create_job(
         job_id="cancel-env-resolution", project_id=project.id, workflow="implement",
-        profile="balanced", prompt="cancel", execution_plan_json=json.dumps(execution_plan_data(plan)),
+        profile="balanced", prompt="cancel", plan_json=json.dumps(execution_plan_data(plan)),
         session="cancel",
     )
     key = target_execution_key(target)
@@ -305,7 +305,7 @@ env = { SHARED_ONLY = "project-value", PROJECT_ONLY = "project-only", LAYERED = 
         }
         assert child_environment["REFRACT_ASK_TOKEN"]
         record = runtime.database.job_record(submitted.job_id)
-        assert "SYNTHETIC_" not in record["execution_plan_json"]
+        assert "SYNTHETIC_" not in record["plan_json"]
         assert "SYNTHETIC_" not in json.dumps(record)
         assert "SYNTHETIC_" not in caplog.text
         assert dict(os.environ) == before_environment
@@ -321,7 +321,7 @@ async def test_environment_configuration_failure_is_sanitized_and_not_provider_f
     runtime = Runtime(replace(base, targets=(target,)))
     def broken_environment(_catalog, _target):
         raise ValueError("Environment value MISSING_SYNTHETIC_SECRET is invalid")
-    monkeypatch.setattr("refract.runtime.resolve_target_environment", broken_environment)
+    monkeypatch.setattr("refract.config.catalog.resolve_target_environment", broken_environment)
     calls = []
     class CountingDrivers(FakeDrivers):
         async def execute(self, **kwargs):
@@ -387,7 +387,7 @@ async def test_environment_binding_reaches_driver_without_persisting_values(tmp_
         assert received[-1]["LOCAL_ONLY"] == "SYNTHETIC_LOCAL_VALUE"
         assert "REFRACT_ASK_TOKEN" in received[-1]
         record = runtime.database.job_record(submitted.job_id)
-        assert "SYNTHETIC_" not in record["execution_plan_json"]
+        assert "SYNTHETIC_" not in record["plan_json"]
         assert "SYNTHETIC_" not in json.dumps(record)
         assert "SYNTHETIC_" not in caplog.text
         assert dict(os.environ) == before_environment
@@ -407,7 +407,7 @@ async def _dispatch_claimed_probe(tmp_path, drivers, runtime_holder=None):
     project = register_project(runtime, str(root))
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     job_id = "probe-job"
-    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
+    runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="probe", plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute(
             "INSERT INTO target_health(target_id, consecutive_failures, circuit_open_until, cooldown_s) VALUES (?, 1, '2000-01-01T00:00:00+00:00', 77)",
@@ -432,7 +432,7 @@ async def test_driver_exception_releases_claimed_probe(tmp_path):
     catalog = runtime.config
     key = target_execution_key(catalog.targets[0])
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
     runtime.drivers = Exploding()
@@ -451,7 +451,7 @@ async def test_capacity_acquire_cancellation_releases_claimed_probe(tmp_path, mo
     project = register_project(runtime, str(root))
     key = target_execution_key(runtime.config.targets[0])
     plan = resolve_execution_plan(get_workflow("implement"), runtime.config, "balanced")
-    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", execution_plan_json="{}", session="probe")
+    runtime.database.create_job(job_id="probe-job", project_id=project.id, workflow="implement", profile="balanced", prompt="probe", plan_json="{}", session="probe")
     with runtime.database._connection:
         runtime.database._connection.execute("INSERT INTO target_health(target_id,circuit_open_until,cooldown_s) VALUES (?, '2000-01-01T00:00:00+00:00', 77)", (key,))
 
@@ -535,7 +535,7 @@ def test_half_open_probe_claim_is_not_leaked_when_target_at_capacity(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_transient_failure_runs_one_target_and_persists_result_metadata(tmp_path) -> None:
+async def test_transient_failure_falls_back_and_persists_last_attempt_metadata(tmp_path) -> None:
     root = repository(tmp_path)
     targets = (TargetConfig(id="one", backend="codex", model="public-model-a"), TargetConfig(id="two", backend="codex", model="public-model-b"))
     catalog = config(tmp_path / "home", targets)
@@ -557,10 +557,10 @@ async def test_transient_failure_runs_one_target_and_persists_result_metadata(tm
         project = register_project(runtime, str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "fail once")).job_id, 5)
         job_result = job.result
-        assert drivers.called == ["one"]
+        assert drivers.called == ["one", "two"]
         assert job.state == "failed"
         assert job_result.failure_kind == "transient"
-        assert job_result.model == "public-model-a"
+        assert job_result.model == "public-model-b"
         assert isinstance(job_result.duration_ms, int)
     finally:
         await runtime.close()
@@ -590,7 +590,7 @@ async def test_retry_overwrites_previous_run_metadata_after_driver_exception(tmp
         submission = await runtime.submit(project.id, "implement", "retry")
         first = await runtime.wait(submission.job_id, 5)
         assert first.result.model == "old-model"
-        retried = await runtime.retry(submission.job_id, target="primary")
+        retried = await runtime.submit_from_job(submission.job_id, target="primary")
         second = await runtime.wait(retried.job_id, 5)
         assert second.state == "failed"
         assert runtime.database.job(submission.job_id).result.model == "old-model"
@@ -631,7 +631,7 @@ async def test_all_open_targets_fail_dispatch_without_counting_or_invoking_drive
         job_id = "dispatch-all-open"
         runtime.database.create_job(
             job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-            prompt="blocked", execution_plan_json=json.dumps(execution_plan_data(plan)),
+            prompt="blocked", plan_json=json.dumps(execution_plan_data(plan)),
             session="implement",
         )
         outcome = await runtime.target_executor.execute(
@@ -771,7 +771,7 @@ async def test_submission_preserves_fallback_targets_beyond_attempt_limit(tmp_pa
         submitted = await runtime.submit(project.id, "review", "inspect")
         record = runtime.database.job_record(submitted.job_id)
         assert record is not None
-        plan = json.loads(record["execution_plan_json"])
+        plan = json.loads(record["plan_json"])
         assert "max_attempts" not in plan["selection"]
         assert [target["id"] for target in plan["targets"]] == ["safe", "fallback"]
         assert plan["targets"][1]["args"] == ["--export", "out.html"]
@@ -783,7 +783,7 @@ async def test_submission_preserves_fallback_targets_beyond_attempt_limit(tmp_pa
 
 @pytest.mark.asyncio
 async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) -> None:
-    from refract.execution import JobRunner
+    from refract.runner.jobs import JobRunner
 
     root = repository(tmp_path)
     catalog = config(tmp_path / "home", (TargetConfig(id="primary", backend="codex", model="cancel-model"),))
@@ -796,7 +796,7 @@ async def test_job_runner_task_cancellation_persists_terminal_state(tmp_path) ->
         workflow="consult",
         profile="balanced",
         prompt="cancel me",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        plan_json=json.dumps(execution_plan_data(plan)),
         session="consult",
     )
     started = asyncio.Event()
@@ -866,7 +866,8 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
             blocker_notice_entered.set()
             await release_blocker_notice.wait()
 
-    runtime = Runtime(config(tmp_path / "home"), notifier=notify)
+    # One worker: the blocker's callback holds it, so the parent is reserved but never dispatched.
+    runtime = Runtime(replace(config(tmp_path / "home"), max_jobs=1), notifier=notify)
     runtime_holder["runtime"] = runtime
     runtime.drivers = RetryDriver()
     await runtime.start()
@@ -895,7 +896,7 @@ async def test_cancel_reserved_unstarted_dispatch_then_retry_uses_fresh_event_on
         assert runtime.database.job(parent.job_id).state == "cancelled"
         assert runtime.scheduler.active_jobs == 0
 
-        retried = await runtime.retry(parent.job_id, target="primary")
+        retried = await runtime.submit_from_job(parent.job_id, target="primary")
         assert retried.job_id != parent.job_id
         assert runtime.database.job(parent.job_id).state == "cancelled"
         assert runtime.database.job(retried.job_id).state == "queued"
@@ -959,7 +960,7 @@ async def test_retry_is_not_lost_while_terminal_notifier_is_paused(tmp_path) -> 
         allow_first_failure.set()
         await asyncio.wait_for(terminal_notice_entered.wait(), 2)
 
-        retry_result = await runtime.retry(submitted.job_id, target="primary")
+        retry_result = await runtime.submit_from_job(submitted.job_id, target="primary")
         assert runtime.database.job(retry_result.job_id).state in {"queued", "running", "succeeded"}
         release_terminal_notice.set()
         assert (await runtime.wait(retry_result.job_id, 5)).state == "succeeded"
@@ -979,7 +980,7 @@ async def test_startup_recovers_interrupted_jobs_before_admission(tmp_path) -> N
     plan = execution_plan_data(resolve_execution_plan(get_workflow("consult"), catalog, "balanced"))
     database.create_job(
         job_id="interrupted-job", project_id=project.id, workflow="consult", profile="balanced",
-        prompt="interrupted", execution_plan_json=json.dumps(plan), session="consult",
+        prompt="interrupted", plan_json=json.dumps(plan), session="consult",
     )
     database.start_job("interrupted-job")
     database.close()
@@ -1012,7 +1013,7 @@ async def test_target_semaphore_released_after_post_acquire_failures(tmp_path, m
         workflow="consult",
         profile="balanced",
         prompt="test target lease",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        plan_json=json.dumps(execution_plan_data(plan)),
         session="consult",
     )
 
@@ -1177,9 +1178,9 @@ async def test_other_job_plan_and_context_retain_role(tmp_path) -> None:
         assert job.workflow == "other"
         assert job.session == "shared"
         assert record is not None
-        assert json.loads(record["execution_plan_json"])["workflow"] == "other"
+        assert json.loads(record["plan_json"])["workflow"] == "other"
         workflows = runtime.database._connection.execute(
-            "SELECT workflow FROM target_sessions WHERE project_id=? AND session='shared'", (project.id,)
+            "SELECT workflow FROM backend_sessions WHERE project_id=? AND session='shared'", (project.id,)
         ).fetchall()
         assert [row[0] for row in workflows] == ["other"]
     finally:
@@ -1283,7 +1284,7 @@ async def test_retry_transition_notifies_each_job_resource(tmp_path) -> None:
         project = register_project(runtime, str(root))
         submission = await runtime.submit(project.id, "implement", "retry")
         assert (await runtime.wait(submission.job_id, 10)).state == "failed"
-        retried = await runtime.retry(submission.job_id, target="primary")
+        retried = await runtime.submit_from_job(submission.job_id, target="primary")
         assert (await runtime.wait(retried.job_id, 10)).state == "failed"
         assert notifications == [submission.job_id] * 3 + [retried.job_id] * 3
     finally:
@@ -1489,7 +1490,7 @@ async def test_startup_interrupts_persisted_running_job_without_reset(tmp_path) 
     database = Database(catalog.database_path)
     project = database.upsert_project(project_id="project", root=root.as_posix())
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", execution_plan_json=json.dumps(execution_plan_data(plan)), session="implement")
+    database.create_job(job_id="running", project_id=project.id, workflow="implement", profile="balanced", prompt="change", plan_json=json.dumps(execution_plan_data(plan)), session="implement")
     database.start_job("running")
     (root / "partial.txt").write_text("partial\n", encoding="utf-8")
     database.close()
@@ -1595,7 +1596,7 @@ async def test_retry_attempts_recompile_argv_per_backend(tmp_path) -> None:
         project = register_project(runtime, str(root))
         job = await runtime.wait((await runtime.submit(project.id, "implement", "retry")).job_id, 10)
         assert job.state == "failed"
-        assert compiled == ["claude-target"]
+        assert compiled == ["claude-target", "pi-target"]
     finally:
         await runtime.close()
 
@@ -1612,7 +1613,9 @@ async def test_new_submissions_use_refreshed_catalog_while_existing_plan_stable(
     home.mkdir()
     path = home / "config.toml"
     path.write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -1634,7 +1637,7 @@ consult = "primary"
     try:
         project = register_project(runtime, str(root))
         submitted = await runtime.submit(project.id, "implement", "first task")
-        plan_before = json.loads(runtime.database.job_record(submitted.job_id)["execution_plan_json"])
+        plan_before = json.loads(runtime.database.job_record(submitted.job_id)["plan_json"])
         assert plan_before["targets"][0]["model"] == "old-model"
 
         # Publish a refreshed catalog that changes the target model.
@@ -1649,11 +1652,11 @@ consult = "primary"
 
         # A new submission resolves against the refreshed catalog.
         fresh = await runtime.submit(project.id, "implement", "second task")
-        plan_after = json.loads(runtime.database.job_record(fresh.job_id)["execution_plan_json"])
+        plan_after = json.loads(runtime.database.job_record(fresh.job_id)["plan_json"])
         assert plan_after["targets"][0]["model"] == "new-model"
 
         # The earlier submission's plan is unchanged.
-        plan_still = json.loads(runtime.database.job_record(submitted.job_id)["execution_plan_json"])
+        plan_still = json.loads(runtime.database.job_record(submitted.job_id)["plan_json"])
         assert plan_still["targets"][0]["model"] == "old-model"
     finally:
         await runtime.close()
@@ -1749,7 +1752,7 @@ async def test_fresh_job_bypasses_session_and_history_and_clears_prior_sessions(
 
 
 @pytest.mark.asyncio
-async def test_fresh_job_failure_preserves_freshness_without_fallback(tmp_path) -> None:
+async def test_fresh_job_failure_falls_back_fresh_and_success_resets_sessions(tmp_path) -> None:
     root = repository(tmp_path)
     catalog = config(
         tmp_path / "home",
@@ -1799,11 +1802,12 @@ async def test_fresh_job_failure_preserves_freshness_without_fallback(tmp_path) 
             fresh=True,
         )
         job = await runtime.wait(submitted.job_id, 10)
-        assert job.state == "failed"
+        assert job.state == "succeeded"
 
-        assert drivers.attempts == [("primary", "", "failover prompt")]
-        assert runtime.database.session(project.id, "stream", "implement", primary_key) == "old-primary-session"
-        assert runtime.database.session(project.id, "stream", "implement", secondary_key) == "old-secondary-session"
+        assert drivers.attempts == [("primary", "", "failover prompt"), ("secondary", "", "failover prompt")]
+        # A fresh success replaces the conversation, so the other target's stored session is cleared.
+        assert runtime.database.session(project.id, "stream", "implement", primary_key) == ""
+        assert runtime.database.session(project.id, "stream", "implement", secondary_key) == "secondary-session"
     finally:
         await runtime.close()
 
@@ -1857,11 +1861,11 @@ async def test_fresh_job_retry_survives_and_runs_fresh(tmp_path) -> None:
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
         # Retry the job
-        retried = await runtime.retry(submitted.job_id, target="primary")
+        retried = await runtime.submit_from_job(submitted.job_id, target="primary")
         record = runtime.database.job_record(retried.job_id)
         assert record
         assert record["fresh"] == 1
-        assert record["retry_of"] == submitted.job_id
+        assert record["from_job"] == submitted.job_id
 
         succeeded_job = await runtime.wait(retried.job_id, 10)
         assert succeeded_job.state == "succeeded"
@@ -1928,7 +1932,7 @@ async def test_fresh_flag_survives_daemon_restart(tmp_path) -> None:
         workflow="implement",
         profile="balanced",
         prompt="fresh restart prompt",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        plan_json=json.dumps(execution_plan_data(plan)),
         session="implement",
         fresh=True,
     )
@@ -2026,7 +2030,7 @@ async def test_fresh_job_persistence_failure_rolls_back_and_preserves_old_sessio
         assert runtime.database.session(project.id, "stream", "implement", tkey) == "old-session"
 
         runtime.database._connection.execute("""
-            CREATE TRIGGER fail_fresh BEFORE INSERT ON target_sessions
+            CREATE TRIGGER fail_fresh BEFORE INSERT ON backend_sessions
             BEGIN
                 SELECT RAISE(FAIL, 'session insert failed');
             END;
@@ -2312,7 +2316,7 @@ async def test_attempt_finished_records_driver_exception_as_request_failure(tmp_
 @pytest.mark.asyncio
 async def test_capability_check_before_submission_with_final_only_fallback(tmp_path, monkeypatch) -> None:
     """Structured mode capability check happens before prompt submission with final-only fallback."""
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
 
     registry = DriverRegistry()
     target_old = TargetConfig(id="target-old", backend="claude-old")
@@ -2332,7 +2336,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
         checks.append(req.driver)
         return Capabilities(available=True, structured_streaming="new" in req.driver or None)
 
-    monkeypatch.setattr("refract.drivers.coding_agent_cli.check", fake_check)
+    monkeypatch.setattr("refract.runner.drivers.coding_agent_cli.check", fake_check)
 
     # A CLI the library cannot verify reads as unsupported and is not cached, so every call probes again
     assert await registry.supports_structured_streaming(target_old) is False
@@ -2381,7 +2385,7 @@ async def test_capability_check_before_submission_with_final_only_fallback(tmp_p
 
 def test_structured_streaming_invokes_help_probe_and_detects_support(tmp_path, monkeypatch) -> None:
     """Default capability probe invokes configured --help command and detects supported structured mode."""
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
     from tests.launchers import install_launcher
 
     marker = tmp_path / "probe_invoked.txt"
@@ -2416,7 +2420,7 @@ def test_structured_streaming_invokes_help_probe_and_detects_support(tmp_path, m
 
 def test_structured_streaming_probe_launches_windows_shim_through_prepare_command(tmp_path, monkeypatch) -> None:
     """The help probe must use the .ps1 shim, never run the .cmd through cmd.exe."""
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
 
     script = tmp_path / "fake_claude.py"
     script.write_text("print('options: --output-format stream-json --include-partial-messages')\n", encoding="utf-8")
@@ -2438,7 +2442,7 @@ def test_structured_streaming_probe_launches_windows_shim_through_prepare_comman
 
 def test_codex_capability_probes_exec_subcommand(tmp_path, monkeypatch) -> None:
     """Codex capability probe must run 'codex exec --help' rather than top-level 'codex --help'."""
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
     from tests.launchers import install_launcher
 
     log = tmp_path / "codex_log.txt"
@@ -2796,11 +2800,11 @@ class ScriptedRecoveryDrivers(FakeDrivers):
 
 
 @pytest.mark.asyncio
-async def test_resumed_context_overflow_fails_without_in_run_recovery(tmp_path) -> None:
+async def test_resumed_context_overflow_starts_one_fresh_session(tmp_path) -> None:
     root = repository(tmp_path)
     script = [
         (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), False),
-        (DriverResult("SUCCESS", "should-not-run", "should not run", "", ""), False),
+        (DriverResult("SUCCESS", "fresh-sess", "recovered", "", ""), False),
     ]
     drivers = ScriptedRecoveryDrivers(script)
     runtime = Runtime(config(tmp_path / "home"))
@@ -2817,16 +2821,15 @@ async def test_resumed_context_overflow_fails_without_in_run_recovery(tmp_path) 
         sub = await runtime.submit(project.id, "implement", "turn 2 prompt", session="feature")
         job = await runtime.wait(sub.job_id, 5)
 
-        assert job.state == "failed"
-        assert job.result.failure_kind == "context_overflow"
-        assert [(c.session_id, c.prompt) for c in drivers.calls] == [("old-sess-1", "turn 2 prompt")]
-        assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
+        assert job.state == "succeeded"
+        assert [(c.session_id, c.prompt) for c in drivers.calls] == [("old-sess-1", "turn 2 prompt"), ("", "turn 2 prompt")]
+        assert runtime.database.session(project.id, "feature", "implement", tkey) == "fresh-sess"
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_resumed_failure_after_tool_activity_is_replay_blocked(tmp_path) -> None:
+async def test_resumed_failure_after_tool_activity_is_not_rerun(tmp_path) -> None:
     root = repository(tmp_path)
     script = [
         (DriverResult("RETRYABLE", "old-sess-1", "", "context length exceeded", "context_overflow"), True),
@@ -2848,8 +2851,11 @@ async def test_resumed_failure_after_tool_activity_is_replay_blocked(tmp_path) -
         job = await runtime.wait(sub.job_id, 5)
 
         assert job.state == "failed"
-        assert job.result.failure_kind == "replay_blocked"
+        assert job.result.failure_kind == "context_overflow"
         assert len(drivers.calls) == 1
+        rows = runtime.database._connection.execute(
+            "SELECT replay_safe FROM attempts WHERE job_id=? ORDER BY seq", (job.id,)).fetchall()
+        assert [row["replay_safe"] for row in rows] == [0]
         assert runtime.database.session(project.id, "feature", "implement", tkey) == "old-sess-1"
     finally:
         await runtime.close()
@@ -2927,7 +2933,7 @@ async def test_terminal_desktop_notifications_succeeded_and_failed(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     runtime = Runtime(catalog)
     runtime.drivers = FakeDrivers()
@@ -2964,7 +2970,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), max_jobs=1, notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     drivers = BlockingDrivers()
     runtime = Runtime(catalog)
@@ -3001,7 +3007,7 @@ async def test_terminal_desktop_notifications_queued_cancel_and_startup_recovery
         workflow="implement",
         profile="balanced",
         prompt="interrupted",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        plan_json=json.dumps(execution_plan_data(plan)),
         session="recovery",
     )
     database.start_job("interrupted-job")
@@ -3028,7 +3034,7 @@ async def test_terminal_desktop_notifications_disabled_by_default(
 ) -> None:
     root = repository(tmp_path)
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
@@ -3049,7 +3055,7 @@ async def test_terminal_desktop_notifications_no_call_on_queued_running_retry(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     runtime = Runtime(catalog)
     runtime.drivers = RetryDrivers()
@@ -3060,7 +3066,7 @@ async def test_terminal_desktop_notifications_no_call_on_queued_running_retry(
         assert (await runtime.wait(submission.job_id, 10)).state == "failed"
         assert mock_send.call_count == 1
 
-        retried = await runtime.retry(submission.job_id, target="primary")
+        retried = await runtime.submit_from_job(submission.job_id, target="primary")
         assert retried.job_id != submission.job_id
         assert mock_send.call_count == 1
         assert (await runtime.wait(retried.job_id, 10)).state == "failed"
@@ -3081,7 +3087,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         notifications.append(job_id)
 
     mock_send_false = MagicMock(return_value=False)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send_false)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send_false)
 
     runtime = Runtime(catalog, notifier=notify)
     runtime.drivers = FakeDrivers()
@@ -3101,7 +3107,7 @@ async def test_terminal_desktop_notifications_failure_isolation(
         assert failed_records[0].job_id == sub1.job_id
 
         mock_send_raise = MagicMock(side_effect=RuntimeError("notification daemon down"))
-        monkeypatch.setattr("refract.runtime.send_job_notification", mock_send_raise)
+        monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send_raise)
         notifications.clear()
         caplog.clear()
 
@@ -3125,7 +3131,7 @@ async def test_terminal_desktop_notifications_live_catalog_toggle(
 ) -> None:
     root = repository(tmp_path)
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     runtime = Runtime(config(tmp_path / "home"))
     runtime.drivers = FakeDrivers()
@@ -3136,12 +3142,12 @@ async def test_terminal_desktop_notifications_live_catalog_toggle(
         await runtime.wait(sub1.job_id, 10)
         assert mock_send.call_count == 0
 
-        runtime._catalog = replace(runtime._catalog, notifications=NotificationsConfig(enabled=True))
+        runtime.catalogs.current = replace(runtime.catalogs.current, notifications=NotificationsConfig(enabled=True))
         sub2 = await runtime.submit(project.id, "implement", "inspect2")
         await runtime.wait(sub2.job_id, 10)
         assert mock_send.call_count == 1
 
-        runtime._catalog = replace(runtime._catalog, notifications=NotificationsConfig(enabled=False))
+        runtime.catalogs.current = replace(runtime.catalogs.current, notifications=NotificationsConfig(enabled=False))
         sub3 = await runtime.submit(project.id, "implement", "inspect3")
         await runtime.wait(sub3.job_id, 10)
         assert mock_send.call_count == 1
@@ -3156,7 +3162,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
     root = repository(tmp_path)
     catalog = replace(config(tmp_path / "home"), notifications=NotificationsConfig(enabled=True))
     mock_send = MagicMock(return_value=True)
-    monkeypatch.setattr("refract.runtime.send_job_notification", mock_send)
+    monkeypatch.setattr("refract.runner.notify.send_job_notification", mock_send)
 
     database = Database(catalog.database_path)
     project = database.upsert_project(project_id="proj-1", root=root.as_posix())
@@ -3167,7 +3173,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
         workflow="implement",
         profile="balanced",
         prompt="fail",
-        execution_plan_json=json.dumps(execution_plan_data(plan)),
+        plan_json=json.dumps(execution_plan_data(plan)),
         session="retry-ctx",
     )
     database.finish_job("failed-1", "failed")
@@ -3191,7 +3197,7 @@ async def test_concurrent_retry_preserves_terminal_notification(
         )
         await first_publish_entered.wait()
 
-        retry_result = await runtime.retry("failed-1", target="primary")
+        retry_result = await runtime.submit_from_job("failed-1", target="primary")
         assert retry_result.state == "queued"
         assert runtime.database.job("failed-1").state == "failed"
 
@@ -3318,7 +3324,7 @@ async def test_telemetry_updated_routes_through_execution_before_stream_recordin
 async def test_library_usage_event_converted_by_adapter_updates_job_tokens(tmp_path: Path, monkeypatch) -> None:
     from coding_agent_cli import Outcome, Result, Usage, events
 
-    import refract.drivers as drivers_module
+    import refract.runner.drivers as drivers_module
 
     async def fake_run(request, *, on_event=None, **kwargs):
         await on_event(events.UsageUpdated(usage=Usage(input=100, output=40)))
@@ -3709,7 +3715,7 @@ class StreamingSequenceDrivers(FakeDrivers):
 
 
 @pytest.mark.asyncio
-async def test_same_target_retry_records_two_attempts_in_job_metrics(tmp_path: Path) -> None:
+async def test_same_target_retry_records_two_attempt_rows(tmp_path: Path) -> None:
     root = repository(tmp_path)
     policy = RetryPolicy(1, ("rate_limit",), ())
     target = TargetConfig(id="primary", backend="codex", retry=policy)
@@ -3730,7 +3736,7 @@ async def test_same_target_retry_records_two_attempts_in_job_metrics(tmp_path: P
         job = await runtime.wait(submission.job_id, 10)
         assert job.state == "succeeded"
         row = runtime.database._connection.execute(
-            "SELECT attempts FROM job_metrics WHERE job_id=?", (submission.job_id,),
+            "SELECT COUNT(*) AS attempts FROM attempts WHERE job_id=?", (submission.job_id,),
         ).fetchone()
         assert row["attempts"] == 2
     finally:
@@ -3761,9 +3767,9 @@ async def test_breaker_open_first_target_records_one_skipped_target(tmp_path: Pa
         job = await runtime.wait(submission.job_id, 10)
         assert job.state == "succeeded"
         row = runtime.database._connection.execute(
-            "SELECT target, skipped_targets FROM job_metrics WHERE job_id=?", (submission.job_id,),
-        ).fetchone()
-        assert tuple(row) == ("available", 1)
+            "SELECT target, reason FROM attempts WHERE job_id=? ORDER BY seq", (submission.job_id,),
+        ).fetchall()
+        assert [tuple(item) for item in row] == [("available", "initial")]
     finally:
         await runtime.close()
 
@@ -3821,7 +3827,7 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
     finally:
         await runtime2.close()
 
-    # 3. Both lists empty allows all eligible transient failures
+    # 3. Both lists empty matches nothing (DESIGN.md attempt table: the error must match retry.codes)
     drivers3 = StreamingSequenceDrivers([
         DriverResult("RETRYABLE", "", "", "unspecified temporary glitch", "arbitrary_transient"),
         DriverResult("SUCCESS", "catchall success", "", "", ""),
@@ -3833,8 +3839,8 @@ async def test_retry_policy_matching_code_or_pattern_and_empty_rules(tmp_path: P
         project3 = register_project(runtime3, str(root))
         sub3 = await runtime3.submit(project3.id, "implement", "test catchall", profile="p_all")
         job3 = await runtime3.wait(sub3.job_id, 10)
-        assert job3.state == "succeeded"
-        assert len(drivers3.invocations) == 2
+        assert job3.state == "failed"
+        assert len(drivers3.invocations) == 1
     finally:
         await runtime3.close()
 
@@ -3901,9 +3907,9 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
-    # REQUEST_FATAL does not retry even if error_code matches
+    # DESIGN.md row 2 retries only on a retry.codes or patterns match, so a REQUEST_FATAL error whose code is not listed does not retry
     drivers = StreamingSequenceDrivers([
-        DriverResult("REQUEST_FATAL", "", "", "bad request", "rate_limit"),
+        DriverResult("REQUEST_FATAL", "", "", "bad request", "invalid_request"),
         DriverResult("SUCCESS", "should not run", "", "", ""),
     ])
     runtime = Runtime(catalog)
@@ -3918,10 +3924,10 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
     finally:
         await runtime.close()
 
-    # TARGET_FATAL does not retry even if error_code matches
+    # DESIGN.md attempt table row 2: a matching error code retries whatever the outcome, TARGET_FATAL included
     drivers2 = StreamingSequenceDrivers([
         DriverResult("TARGET_FATAL", "", "", "backend dead", "rate_limit"),
-        DriverResult("SUCCESS", "should not run", "", "", ""),
+        DriverResult("SUCCESS", "sid", "", "", ""),
     ])
     runtime2 = Runtime(catalog)
     runtime2.drivers = drivers2
@@ -3930,8 +3936,8 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
         project2 = register_project(runtime2, str(root))
         sub2 = await runtime2.submit(project2.id, "implement", "target fatal test")
         job2 = await runtime2.wait(sub2.job_id, 10)
-        assert job2.state == "failed"
-        assert len(drivers2.invocations) == 1
+        assert job2.state == "succeeded"
+        assert len(drivers2.invocations) == 2
     finally:
         await runtime2.close()
 
@@ -3939,7 +3945,7 @@ async def test_retry_policy_exclusions_fatal_and_cancellation(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_retry_probe_and_capacity_held_and_final_only_health(tmp_path: Path) -> None:
+async def test_retry_releases_probe_between_attempts_and_records_final_only_health(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
 
@@ -3991,12 +3997,12 @@ async def test_retry_probe_and_capacity_held_and_final_only_health(tmp_path: Pat
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "succeeded"
 
-        # Probe was held continuously by job across both attempt 1 and attempt 2
+        # Each attempt releases its probe and the next attempt claims it again, so every attempt owns its probe
         assert len(probe_during_retry) == 2
         assert probe_during_retry[0] == (1, sub.job_id)
         assert probe_during_retry[1] == (2, sub.job_id)
 
-        # Capacity permit was held continuously across attempts
+        # Each attempt holds its own capacity permit
         assert active_during_retry[0] == (1, 1)
         assert active_during_retry[1] == (2, 1)
 
@@ -4094,7 +4100,7 @@ async def test_retry_ten_attempts_budget_bound(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path) -> None:
+async def test_retry_tool_activity_after_truncation_blocks_rerun(tmp_path: Path) -> None:
     root = repository(tmp_path)
     base = config(tmp_path / "home")
 
@@ -4130,7 +4136,7 @@ async def test_retry_tool_activity_after_truncation_blocks_replay(tmp_path: Path
         job = await runtime.wait(sub.job_id, 10)
         assert job.state == "failed"
         assert len(drivers.invocations) == 1
-        assert job.result.failure_kind == "replay_blocked"
+        assert job.result.failure_kind == "transient"
     finally:
         await runtime.close()
 
@@ -4246,7 +4252,7 @@ async def test_retry_ask_token_issue_failure_propagates_without_driver_call(tmp_
     try:
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
-        runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
+        runtime.database.create_job(job_id="ask-issue-fault", project_id=project.id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="ctx")
         cancel_event = CancelEvent()
         with pytest.raises(RuntimeError, match="issue token fault"):
             await runtime.target_executor.execute(
@@ -4264,7 +4270,7 @@ async def test_retry_driver_exception_does_not_reuse_previous_result(tmp_path: P
     root = repository(tmp_path)
     base = config(tmp_path / "home")
     catalog = replace(base, 
-        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, (), ())),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, ("rate_limit",), ())),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
     class ResultThenException(StreamingSequenceDrivers):
         def __init__(self):
@@ -4305,7 +4311,7 @@ async def test_retry_finalization_faults_release_target_resources(tmp_path: Path
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
         job_id = f"finalize-{fault}"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="ctx")
         if fault == "revoke":
             class RevokeFault:
                 def issue_token(self, *_args, **_kwargs): return "token"
@@ -4334,7 +4340,7 @@ async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocatio
     root = repository(tmp_path)
     base = config(tmp_path / "home")
     catalog = replace(base, 
-        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, (), ())),),
+        targets=(TargetConfig(id="primary", backend="codex", retry=RetryPolicy(1, ("rate_limit",), ())),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}})
     runtime = Runtime(catalog)
     drivers = ScriptedRecoveryDrivers([
@@ -4347,7 +4353,7 @@ async def test_retry_cancellation_during_attempt_setup_prevents_driver_invocatio
         project = register_project(runtime, str(root))
         plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
         job_id = "cancel-setup-race"
-        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="ctx")
+        runtime.database.create_job(job_id=job_id, project_id=project.id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="ctx")
         cancel_event = CancelEvent()
         starts = 0
         original_start = runtime.target_executor._start_attempt
@@ -4404,14 +4410,14 @@ async def test_stored_target_policy_survives_current_policy_changes(tmp_path: Pa
     job_id = "stored-policy-environment"
     runtime.database.create_job(
         job_id=job_id, project_id=project.id, workflow="implement", profile="balanced",
-        prompt="stored policy", execution_plan_json=plan_json, session="stored-policy",
+        prompt="stored policy", plan_json=plan_json, session="stored-policy",
     )
     current_target = replace(
         old_target, backend="pi", args=("--new-setting",), max_concurrency=4,
         retry=RetryPolicy(0, (), ()), env={"ROTATED_ENV": "SYNTHETIC_CURRENT_ENV"},
     )
     current_catalog = replace(old_catalog, targets=(current_target,))
-    runtime._catalog = current_catalog
+    runtime.catalogs.current = current_catalog
     runtime.target_executor.refresh_configuration(current_catalog)
     observations = []
     class PolicyObservingDrivers(FakeDrivers):
@@ -4429,7 +4435,7 @@ async def test_stored_target_policy_survives_current_policy_changes(tmp_path: Pa
             ("codex", ("--old-setting",), 1, old_policy, "SYNTHETIC_CURRENT_ENV"),
             ("codex", ("--old-setting",), 1, old_policy, "SYNTHETIC_CURRENT_ENV"),
         ]
-        assert "SYNTHETIC_" not in runtime.database.job_record(job_id)["execution_plan_json"]
+        assert "SYNTHETIC_" not in runtime.database.job_record(job_id)["plan_json"]
     finally:
         await runtime.close()
 
@@ -4445,7 +4451,7 @@ async def test_real_adapter_observations_through_execution_persist_reported_cons
     async def fake_check(req, **kwargs):
         return Capabilities(available=True, structured_streaming=True if streaming else None)
 
-    monkeypatch.setattr("refract.drivers.coding_agent_cli.check", fake_check)
+    monkeypatch.setattr("refract.runner.drivers.coding_agent_cli.check", fake_check)
 
     if backend_name == "claude":
         c_lines = [
@@ -4625,7 +4631,7 @@ async def test_retry_unknown_observation_blocks_replay(tmp_path: Path) -> None:
     policy = RetryPolicy(2, ("rate_limit",), ())
     catalog = replace(
         base,
-        targets=(TargetConfig(id="primary", backend="codex", retry=policy),),
+        targets=(TargetConfig(id="primary", backend="agy", retry=policy),),
         profiles={"balanced": {"implement": TargetSelection(("primary",)), "review": TargetSelection(("primary",)), "consult": TargetSelection(("primary",))}},
     )
 
@@ -4666,7 +4672,7 @@ def _attempt_runtime(tmp_path, drivers) -> tuple[Runtime, Path]:
 async def _execute_primary(runtime: Runtime, root: Path, cancel_event: CancelEvent | None = None):
     project = register_project(runtime, str(root))
     plan = resolve_execution_plan(get_workflow("implement"), runtime.config, "balanced")
-    runtime.database.create_job(job_id="attempt-job", project_id=project.id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
+    runtime.database.create_job(job_id="attempt-job", project_id=project.id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="s")
     return await runtime.target_executor.execute(
         job_id="attempt-job", project=project, workflow="implement", session="s", plan=plan,
         prompt="p", cwd=root, cancel_event=cancel_event or CancelEvent(),
@@ -4846,7 +4852,6 @@ _OUTCOME_CASES = [
     pytest.param(DriverResult("CANCELLED", "", "", "", ""), {}, "cancelled", id="cancelled"),
     pytest.param(DriverResult("RETRYABLE", "", "", "", ""), {"circuit_open": True}, "circuit_open", id="circuit-open-flag"),
     pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "circuit_open"), {}, "circuit_open", id="circuit-open-code"),
-    pytest.param(DriverResult("RETRYABLE", "", "", "", ""), {"replay_blocked": True}, "replay_blocked", id="replay-blocked"),
     pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "context_overflow"), {}, "context_overflow", id="context-overflow"),
     pytest.param(DriverResult("TARGET_FATAL", "", "", "", "configuration_error"), {}, "request_fatal", id="configuration-error"),
     pytest.param(DriverResult("REQUEST_FATAL", "", "", "", "x"), {}, "request_fatal", id="request-fatal"),
@@ -4893,7 +4898,7 @@ async def test_invocation_reports_tool_activity_and_stream_events(tmp_path) -> N
 
     runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
     try:
-        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
+        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="s")
         tokens: list = []
         result, tool_activity = await _invoke(runtime, root, Streaming(), tokens)
         assert (result.outcome, tool_activity) == ("SUCCESS", True)
@@ -4939,7 +4944,7 @@ async def test_invocation_malformed_backend_tokens_are_ignored(tmp_path, caplog)
 
 @pytest.mark.asyncio
 async def test_invocation_telemetry_failure_is_logged_and_run_continues(tmp_path, caplog, monkeypatch) -> None:
-    import refract.execution as execution_module
+    import refract.runner.invocation as execution_module
 
     class Streaming(FakeDrivers):
         async def execute(self, *, on_event, **kwargs):
@@ -4951,8 +4956,8 @@ async def test_invocation_telemetry_failure_is_logged_and_run_continues(tmp_path
 
     runtime, root = _attempt_runtime(tmp_path, FakeDrivers())
     try:
-        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", execution_plan_json="{}", session="s")
-        monkeypatch.setattr(execution_module, "_counters_from", broken)
+        runtime.database.create_job(job_id="inv-job", project_id=register_project(runtime, str(root)).id, workflow="implement", profile="balanced", prompt="p", plan_json="{}", session="s")
+        monkeypatch.setattr(execution_module, "counters_from", broken)
         with caplog.at_level("WARNING"):
             result, _ = await _invoke(runtime, root, Streaming(), [])
         assert result.outcome == "SUCCESS"

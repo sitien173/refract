@@ -27,7 +27,7 @@ Skip a skill workflow only when the user explicitly says to.
    skills carry it out.
    - "Let's build X" → `brainstorming`, unless a confirmed design exists,
      then implementation skills.
-   - "Fix this bug" → `systematic-debugging`, then domain skills.
+   - "Fix this bug" → `coordinating-multi-model-work` when the scope is coordinated, otherwise direct work, then `verifying-before-completion` before claiming it is fixed.
 3. **Announce.** Say "Using <skill> to <purpose>."
 4. **Classify scope** with the rule below and emit the scope line.
 5. **Follow** the skill exactly. If on reading it does not fit, state why in
@@ -60,6 +60,5 @@ bump is coordinated. When the signal is genuinely ambiguous, ask one bounded
 question: direct or planned.
 
 Direct work uses your own tools and skips all three gates. Process skills such
-as `systematic-debugging`, `test-driven-development`, and
-`verifying-before-completion` still apply. Coordinated work loads
+as `verifying-before-completion` still apply. Coordinated work loads
 `coordinating-multi-model-work`.

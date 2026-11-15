@@ -5,7 +5,13 @@ import threading
 
 import pytest
 
-from refract.scheduler import ProjectScheduler
+from refract.scheduling.cancel import CancelEvent
+from refract.scheduling.scheduler import ProjectScheduler
+
+
+async def _settled(scheduler: ProjectScheduler) -> None:
+    """Wait until every dispatched task has returned."""
+    await asyncio.wait_for(asyncio.gather(*scheduler._tasks), 1)
 
 
 @pytest.mark.asyncio
@@ -26,9 +32,17 @@ async def test_jobs_run_concurrently_up_to_capacity() -> None:
     scheduler.enqueue("a2")
     await asyncio.wait_for(both_started.wait(), 1)
     release.set()
-    await scheduler.wait("a1", 1)
-    await scheduler.wait("a2", 1)
+    await _settled(scheduler)
     await scheduler.close()
+
+
+def test_scheduler_has_exactly_one_queue_structure() -> None:
+    scheduler = ProjectScheduler(1, lambda *_: asyncio.sleep(0))
+    queues = [
+        name for name, value in vars(scheduler).items()
+        if isinstance(value, asyncio.Queue) or type(value).__name__ == "deque"
+    ]
+    assert queues == ["_queue"]
 
 
 @pytest.mark.asyncio
@@ -48,58 +62,93 @@ async def test_queued_cancel_removes_job_without_running() -> None:
     scheduler.enqueue("a1")
     scheduler.enqueue("a2")
     await first_started.wait()
+    assert scheduler.queued_jobs == 1
     assert scheduler.cancel("a2") == "queued"
-    await asyncio.wait_for(scheduler.wait("a2"), 1)
+    assert scheduler.queued_jobs == 0
     release_first.set()
-    await scheduler.wait("a1", 1)
+    await _settled(scheduler)
     assert calls == ["a1"]
     assert scheduler._current == {}
-    assert not scheduler._pending
     await scheduler.close()
 
 
 @pytest.mark.asyncio
-async def test_completed_job_supports_multiple_and_late_waiters() -> None:
-    release = asyncio.Event()
+async def test_cancel_reports_missing_and_running() -> None:
+    started = asyncio.Event()
+    seen: list[threading.Event] = []
 
-    async def run_job(_: str, __: threading.Event) -> None:
-        await release.wait()
+    async def run_job(_: str, cancel_event: threading.Event) -> None:
+        seen.append(cancel_event)
+        started.set()
+        await asyncio.get_running_loop().run_in_executor(None, cancel_event.wait)
 
     scheduler = ProjectScheduler(1, run_job)
     await scheduler.start()
+    assert scheduler.cancel("nope") == "missing"
     scheduler.enqueue("job")
-    first = asyncio.create_task(scheduler.wait("job"))
-    second = asyncio.create_task(scheduler.wait("job"))
-    release.set()
-    await asyncio.wait_for(asyncio.gather(first, second), 1)
-    await asyncio.wait_for(scheduler.wait("job"), 1)
-    assert scheduler._current == {}
-    assert not scheduler._pending
+    await started.wait()
+    assert scheduler.cancel("job") == "running"
+    assert seen[0].is_set()
+    await _settled(scheduler)
     await scheduler.close()
 
 
 @pytest.mark.asyncio
-async def test_close_releases_queued_waiters_and_bookkeeping() -> None:
+async def test_fifo_admission_order() -> None:
+    order: list[str] = []
+
+    async def run_job(job_id: str, _: threading.Event) -> None:
+        order.append(job_id)
+        await asyncio.sleep(0)
+
+    scheduler = ProjectScheduler(1, run_job)
+    for name in ("a", "b", "c"):
+        scheduler.enqueue(name)
+    await scheduler.start()
+    while scheduler._tasks or scheduler.queued_jobs:
+        await asyncio.sleep(0)
+    assert order == ["a", "b", "c"]
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_running_keeps_queued_and_clears_bookkeeping() -> None:
     started = asyncio.Event()
 
-    async def run_job(_: str, cancel_event: threading.Event) -> None:
+    async def run_job(_: str, cancel_event: CancelEvent) -> None:
         started.set()
-        while not cancel_event.is_set():
-            await asyncio.sleep(0)
+        await cancel_event.wait_async()
 
     scheduler = ProjectScheduler(1, run_job)
     await scheduler.start()
     scheduler.enqueue("running")
     scheduler.enqueue("queued")
     await started.wait()
-    waiter = asyncio.create_task(scheduler.wait("queued"))
     await scheduler.close()
 
-    await asyncio.wait_for(waiter, 1)
     assert scheduler._current == {}
-    assert not scheduler._pending
+    assert not scheduler._queue
+    assert not scheduler._tasks
 
 
+@pytest.mark.asyncio
+async def test_close_cancels_job_whose_slot_was_already_released() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def run_job(_: str, cancel_event: CancelEvent) -> None:
+        started.set()
+        await cancel_event.wait_async()
+        cancelled.set()
+
+    scheduler = ProjectScheduler(1, run_job)
+    await scheduler.start()
+    scheduler.enqueue("job")
+    await started.wait()
+    scheduler.complete("job")
+    assert scheduler.active_jobs == 0
+    await scheduler.close()
+    assert cancelled.is_set()
 
 
 @pytest.mark.asyncio
@@ -124,12 +173,12 @@ async def test_global_capacity_queues_jobs_from_other_projects() -> None:
     assert not second_started.is_set()
     release_first.set()
     await asyncio.wait_for(second_started.wait(), 1)
-    await asyncio.wait_for(scheduler.wait("second", 1), 1)
+    await _settled(scheduler)
     await scheduler.close()
 
 
 @pytest.mark.asyncio
-async def test_scheduler_worker_survives_run_callback_exception() -> None:
+async def test_scheduler_survives_run_callback_exception() -> None:
     second_started = asyncio.Event()
 
     async def run_job(job_id: str, _: threading.Event) -> None:
@@ -142,12 +191,12 @@ async def test_scheduler_worker_survives_run_callback_exception() -> None:
     scheduler.enqueue("fails")
     scheduler.enqueue("succeeds")
     await asyncio.wait_for(second_started.wait(), 1)
-    await asyncio.wait_for(scheduler.wait("succeeds", 1), 1)
+    await _settled(scheduler)
     await scheduler.close()
 
 
 @pytest.mark.asyncio
-async def test_terminal_commit_releases_project_before_notifier_finishes() -> None:
+async def test_terminal_commit_reserves_next_job_but_worker_starts_it_after_callback_returns() -> None:
     first_started = asyncio.Event()
     second_started = asyncio.Event()
     allow_first_to_return = asyncio.Event()
@@ -159,20 +208,24 @@ async def test_terminal_commit_releases_project_before_notifier_finishes() -> No
         else:
             second_started.set()
 
-    scheduler = ProjectScheduler(2, run_job)
+    scheduler = ProjectScheduler(1, run_job)
     await scheduler.start()
     scheduler.enqueue("first")
     await asyncio.wait_for(first_started.wait(), 1)
-    scheduler.complete("first", signal=False)
+    scheduler.complete("first")
     scheduler.enqueue("second")
-    await asyncio.wait_for(second_started.wait(), 1)
+    # The slot is free, so `second` holds the reservation, but the only worker is still in the first callback.
+    assert scheduler.active_jobs == 1
+    assert not scheduler._current["second"].started
+    assert not second_started.is_set()
     allow_first_to_return.set()
-    await scheduler.wait("second", 1)
+    await asyncio.wait_for(second_started.wait(), 1)
+    await _settled(scheduler)
     await scheduler.close()
 
 
 @pytest.mark.asyncio
-async def test_old_terminal_dispatch_cleanup_does_not_signal_retry_waiter() -> None:
+async def test_old_dispatch_cleanup_does_not_release_requeued_job() -> None:
     first_started = asyncio.Event()
     finish_old_dispatch = asyncio.Event()
     retry_started = asyncio.Event()
@@ -195,10 +248,78 @@ async def test_old_terminal_dispatch_cleanup_does_not_signal_retry_waiter() -> N
     await asyncio.wait_for(first_started.wait(), 1)
     scheduler.complete("retryable")
     scheduler.enqueue("retryable")
-    waiter = asyncio.create_task(scheduler.wait("retryable"))
     finish_old_dispatch.set()
     await asyncio.wait_for(retry_started.wait(), 1)
-    assert not waiter.done()
+    assert "retryable" in scheduler._current
+    assert scheduler.active_jobs == 1
     finish_retry.set()
-    await asyncio.wait_for(waiter, 1)
+    await _settled(scheduler)
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_busy_session_waiters_do_not_starve_other_sessions() -> None:
+    release = asyncio.Event()
+    started: list[str] = []
+    session_s, session_t = ("p", "s", "w"), ("p", "t", "w")
+
+    async def run_job(job_id: str, _: threading.Event) -> None:
+        started.append(job_id)
+        if job_id.startswith("s"):
+            await release.wait()
+
+    scheduler = ProjectScheduler(4, run_job)
+    await scheduler.start()
+    for name in ("s1", "s2", "s3", "s4"):
+        scheduler.enqueue(name, session_s)
+    scheduler.enqueue("t1", session_t)
+    await asyncio.sleep(0.05)
+    assert started == ["s1", "t1"]
+    assert scheduler.queued_jobs == 3
+    assert scheduler.cancel("s3") == "queued"
+    release.set()
+    await asyncio.sleep(0.05)
+    assert started == ["s1", "t1", "s2", "s4"]
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_reserved_job_starts_behind_unreservable_session_waiter_when_worker_frees() -> None:
+    release_a1 = asyncio.Event()
+    b_committed = asyncio.Event()
+    release_b = asyncio.Event()
+    started: list[str] = []
+    session_a, session_b, session_c = ("p", "a", "w"), ("p", "b", "w"), ("p", "c", "w")
+
+    async def run_job(job_id: str, _: threading.Event) -> None:
+        started.append(job_id)
+        if job_id == "a1":
+            await release_a1.wait()
+        elif job_id == "b":
+            await b_committed.wait()
+            await release_b.wait()
+
+    scheduler = ProjectScheduler(2, run_job)
+    await scheduler.start()
+    scheduler.enqueue("a1", session_a)
+    scheduler.enqueue("b", session_b)
+    await asyncio.sleep(0.05)
+    scheduler.enqueue("a2", session_a)
+    scheduler.enqueue("c", session_c)
+    await asyncio.sleep(0.05)
+    assert started == ["a1", "b"]
+    # b commits: c takes the freed reservation but b's callback still holds the second worker.
+    scheduler.complete("b")
+    b_committed.set()
+    await asyncio.sleep(0.05)
+    assert started == ["a1", "b"]
+    assert scheduler.active_jobs == 2
+    release_b.set()
+    await asyncio.sleep(0.05)
+    # a2 waits behind a1's session lock; reserved c must start without a1 finishing.
+    assert started == ["a1", "b", "c"]
+    assert scheduler.queued_jobs == 1
+    release_a1.set()
+    await asyncio.sleep(0.05)
+    assert started == ["a1", "b", "c", "a2"]
     await scheduler.close()

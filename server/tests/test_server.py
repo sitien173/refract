@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import uuid
 from types import SimpleNamespace
 
@@ -14,13 +16,26 @@ import pytest
 from refract.config import load_config
 from refract.models import JobSummary, JobView, SubmissionResult
 from refract.runtime import OrchestrationError, Runtime
-from refract.scheduler import _Dispatch
-from refract.server import RefractError, answer, mcp, wait
+from refract.scheduling.waiting import WaitResult
+from refract.scheduling.scheduler import _Dispatch
+from refract.api.mcp.app import mcp
+from refract.api.mcp.responses import RefractError
+from refract.api.mcp import responses, tools
+from refract.api.mcp.tools import answer, wait
 from tests.orchestration_helpers import git, register_project
 
 
+class _WaitShim:
+    """Runtime double mixin: `wait_jobs` as the tool calls it, over the double's single-ID `wait`."""
+
+    async def wait_jobs(self, job_ids, timeout_s):
+        return WaitResult(await self.wait(job_ids[0], timeout_s), True)
+
+
 def _serve_config(host: str = "127.0.0.1", port: int = 8765) -> str:
-    return f"""[daemon]
+    return f"""schema_version = 1
+
+[daemon]
 host = "{host}"
 port = {port}
 default_profile = "balanced"
@@ -41,7 +56,7 @@ other = "primary"
 async def _connected_client(tmp_path, monkeypatch):
     from mcp.client.session import ClientSession
     from mcp.shared.memory import create_client_server_memory_streams
-    from refract import server
+    from refract.api.mcp import app as server
 
     home = tmp_path / "refract-home"
     home.mkdir()
@@ -49,7 +64,7 @@ async def _connected_client(tmp_path, monkeypatch):
     config_path.write_text(_serve_config(), encoding="utf-8")
     monkeypatch.setenv("REFRACT_HOME", str(home))
     monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
-    from refract.dashboard import DashboardState
+    from refract.api.http.common import DashboardState
     state = DashboardState()
     instance = server.create_mcp(server.load_config(config_path), state=state)
     lowlevel = instance._lowlevel_server
@@ -70,11 +85,11 @@ async def _connected_client(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_tool_surface_lists_exact_v3_contract() -> None:
     expected = {
-        "submit": {"path", "workflow", "prompt", "profile", "session", "fresh"},
-        "wait": {"job_id", "timeout_s"},
+        "submit": {"path", "workflow", "prompt", "profile", "session", "fresh", "from_job", "target"},
+        "get": {"job_id"},
+        "wait": {"job_ids", "timeout_s"},
         "answer": {"job_id", "answer"},
         "cancel": {"job_id"},
-        "retry": {"job_id", "target"},
         "list": {"path"},
         "card_create": {"path", "title", "body", "job_ids"},
         "card_move": {"card_id", "state", "job_ids", "note"},
@@ -98,7 +113,7 @@ async def test_tool_surface_lists_exact_v3_contract() -> None:
 
 
 def test_targets_unavailable_error_schema_carries_retry_delay_only_for_that_code() -> None:
-    from refract.server import RefractError, _valid_refract_error
+    from refract.api.mcp.responses import RefractError, _valid_refract_error
 
     payload = RefractError("targets_unavailable", "open", "wait", 8).to_payload()
     assert payload["retry_after_s"] == 8
@@ -111,7 +126,7 @@ def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
     env = os.environ.copy()
     env["REFRACT_HOME"] = str(tmp_path / "missing-home")
     completed = subprocess.run(
-        [sys.executable, "-c", "import refract.server"],
+        [sys.executable, "-c", "import refract.api.mcp.app"],
         env=env,
         capture_output=True,
         text=True,
@@ -121,7 +136,8 @@ def test_server_import_does_not_load_daemon_config(tmp_path) -> None:
 
 
 def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
-    from refract import cli, server
+    from refract import cli
+    from refract.api.mcp import app as server
     import uvicorn
 
     home = tmp_path / "refract"
@@ -158,7 +174,8 @@ def test_serve_uses_configured_transport(tmp_path, monkeypatch) -> None:
 
 
 def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
-    from refract import cli, server
+    from refract import cli
+    from refract.api.mcp import app as server
     import uvicorn
 
     home = tmp_path / "refract"
@@ -194,8 +211,9 @@ def test_serve_cli_transport_overrides_config(tmp_path, monkeypatch) -> None:
     }
 
 
-def test_serve_refuses_non_loopback_host_without_opt_in(tmp_path, monkeypatch, capsys) -> None:
-    from refract import cli, server
+def test_serve_refuses_non_loopback_host(tmp_path, monkeypatch, capsys) -> None:
+    from refract import cli
+    from refract.api.mcp import app as server
     import uvicorn
 
     home = tmp_path / "refract"
@@ -214,42 +232,48 @@ def test_serve_refuses_non_loopback_host_without_opt_in(tmp_path, monkeypatch, c
     with pytest.raises(SystemExit) as refused:
         cli.main(["serve"])
     assert refused.value.code == 2
-    assert "--allow-remote" in capsys.readouterr().err
+    assert "loopback is the only supported bind address" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as explicit:
+        cli.main(["serve", "--host", "0.0.0.0"])
+    assert explicit.value.code == 2
+    with pytest.raises(SystemExit) as removed:
+        cli.main(["serve", "--allow-remote"])
+    assert removed.value.code == 2
     assert launched == []
 
-    cli.main(["serve", "--allow-remote"])
     cli.main(["serve", "--host", "::1"])
     cli.main(["serve", "--host", "localhost"])
-    assert launched == ["0.0.0.0", "::1", "localhost"]
+    assert launched == ["::1", "localhost"]
 
 
 @pytest.mark.asyncio
 async def test_tool_schema_limits_and_annotations_are_v3() -> None:
     tools = {tool.name: tool for tool in await mcp.list_tools()}
     assert set(tools) == {
-        "submit", "wait", "answer", "cancel", "retry", "list", "card_create", "card_move", "card_list",
+        "submit", "get", "wait", "answer", "cancel", "list", "card_create", "card_move", "card_list",
     }
     from refract.workflows import BUILTIN_WORKFLOWS
 
-    assert tools["submit"].input_schema["properties"]["workflow"]["enum"] == list(BUILTIN_WORKFLOWS)
+    workflow_description = tools["submit"].input_schema["properties"]["workflow"]["description"]
+    assert all(name in workflow_description for name in BUILTIN_WORKFLOWS)
     assert tools["wait"].input_schema["properties"]["timeout_s"]["minimum"] == 0
     assert tools["wait"].input_schema["properties"]["timeout_s"]["maximum"] == 3600
-    assert tools["submit"].input_schema["properties"]["fresh"]["default"] is False
+    assert tools["submit"].input_schema["properties"]["fresh"]["default"] is None
     assert tools["answer"].input_schema["properties"]["answer"]["maxLength"] == 8192
     assert tools["cancel"].annotations is not None
     assert tools["cancel"].annotations.idempotent_hint is True
     assert tools["wait"].annotations.read_only_hint is True
     assert tools["submit"].annotations.destructive_hint is True
-    assert tools["retry"].annotations.idempotent_hint is False
+    assert tools["get"].annotations.read_only_hint is True
     expected_annotations = {
         "submit": (False, True, False, True),
+        "get": (True, False, True, False),
         "wait": (True, False, True, False),
         "answer": (False, False, False, False),
         "cancel": (False, True, True, False),
-        "retry": (False, True, False, True),
         "list": (True, False, True, False),
         "card_create": (False, False, False, False),
-        "card_move": (False, True, True, False),
+        "card_move": (False, False, True, False),
         "card_list": (True, False, True, False),
     }
     for name, expected_hints in expected_annotations.items():
@@ -263,7 +287,7 @@ async def test_tool_schema_limits_and_annotations_are_v3() -> None:
         assert annotations.title == tools[name].title
         assert all(prop.get("description") for prop in tools[name].input_schema["properties"].values())
     assert set(JobSummary.model_fields) == {
-        "id", "project", "workflow", "profile", "target", "session", "state", "retry_of", "created_at", "updated_at",
+        "id", "project", "workflow", "profile", "target_id", "session", "state", "from_job", "created_at", "updated_at",
     }
     assert "resource_uri" not in SubmissionResult.model_fields
 
@@ -272,7 +296,7 @@ async def test_tool_schema_limits_and_annotations_are_v3() -> None:
 async def test_inprocess_client_receives_compact_json_errors(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, _runtime):
         malformed = await client.call_tool(
-            "wait", {"job_id": "job", "timeout_s": -1}
+            "wait", {"job_ids": ["job"], "timeout_s": -1}
         )
         assert malformed.is_error
         malformed_payload = json.loads(malformed.content[0].text)
@@ -281,7 +305,7 @@ async def test_inprocess_client_receives_compact_json_errors(tmp_path, monkeypat
         assert malformed_payload["next_action"]
 
         unknown = await client.call_tool(
-            "wait", {"job_id": "missing-job", "timeout_s": 0}
+            "wait", {"job_ids": ["missing-job"], "timeout_s": 0}
         )
         assert unknown.is_error
         unknown_payload = json.loads(unknown.content[0].text)
@@ -349,10 +373,10 @@ async def test_mcp_client_completes_v3_cycle_in_three_calls(tmp_path, monkeypatc
             {"path": str(root), "workflow": "consult", "prompt": "inspect"},
         )
         job_id = json.loads(submitted.content[0].text)["job"]["id"]
-        waited = await client.call_tool("wait", {"job_id": job_id, "timeout_s": 5})
+        waited = await client.call_tool("wait", {"job_ids": [job_id], "timeout_s": 5})
         result = json.loads(waited.content[0].text)
         assert result["job"]["state"] == "succeeded"
-        assert result["result"]["text"] == "response from primary"
+        assert result["result"] == "response from primary"
 
 
 @pytest.mark.asyncio
@@ -364,8 +388,8 @@ async def test_actual_client_rejects_sdk_coercions_before_dispatch(tmp_path, mon
         project = register_project(runtime, str(root))
         before = runtime.database.jobs(project.id)
         invalid_calls = [
-            ("wait", {"job_id": "missing", "timeout_s": True}),
-            ("wait", {"job_id": "missing", "timeout_s": "0"}),
+            ("wait", {"job_ids": ["missing"], "timeout_s": True}),
+            ("wait", {"job_ids": ["missing"], "timeout_s": "0"}),
             ("submit", {"path": str(root), "workflow": "implement", "prompt": "must not queue", "fresh": 1}),
             ("submit", {"path": str(root), "workflow": "implement", "prompt": "must not queue", "fresh": "false"}),
         ]
@@ -413,22 +437,22 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
             return payload
 
         await check("list", {"path": str(root / "missing")}, "invalid_path")
-        await check("wait", {"job_id": "missing-job", "timeout_s": 0}, "unknown_job")
+        await check("wait", {"job_ids": ["missing-job"], "timeout_s": 0}, "unknown_job")
         await check("cancel", {"job_id": "missing-job"}, "unknown_job")
         await check("submit", {"path": str(root), "workflow": "implement", "prompt": "x", "profile": "missing-profile"}, "unknown_profile")
 
         runtime.database.create_job(
             job_id="failed-parent", project_id=project.id, workflow="review", profile="balanced",
-            prompt="parent", execution_plan_json="{}", session="parent",
+            prompt="parent", plan_json="{}", session="parent",
         )
         runtime.database.finish_job("failed-parent", "failed")
-        await check("retry", {"job_id": "missing-job"}, "unknown_job")
+        await check("submit", {"path": str(root), "from_job": "missing-job"}, "unknown_job")
 
         runtime.database.create_job(
             job_id="queued-invalid-retry", project_id=project.id, workflow="review", profile="balanced",
-            prompt="queued", execution_plan_json="{}", session="queued",
+            prompt="queued", plan_json="{}", session="queued",
         )
-        await check("retry", {"job_id": "queued-invalid-retry"}, "invalid_state")
+        await check("submit", {"path": str(root), "from_job": "queued-invalid-retry"}, "invalid_state")
         (runtime.config.home / "task_guide.json").write_text("{invalid", encoding="utf-8")
         await check("list", {"path": str(root)}, "config_invalid")
         (runtime.config.home / "task_guide.json").write_text(json.dumps({"guidance": "g" * 12000}), encoding="utf-8")
@@ -441,7 +465,7 @@ async def test_expected_runtime_error_families_are_compact_json(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_mcp_submit_all_open_returns_retry_delay(tmp_path, monkeypatch) -> None:
-    from refract.planning import target_execution_key
+    from refract.runner.planning import target_execution_key
 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "submit-all-open"
@@ -478,21 +502,21 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
         submitted = await client.call_tool("submit", {"path": str(root), "workflow": "consult", "prompt": "inspect"})
         responses.append(submitted)
         submitted_id = json.loads(submitted.content[0].text)["job"]["id"]
-        responses.append(await client.call_tool("wait", {"job_id": submitted_id, "timeout_s": 5}))
+        responses.append(await client.call_tool("wait", {"job_ids": [submitted_id], "timeout_s": 5}))
         responses.append(await client.call_tool("list", {"path": str(root)}))
         runtime.database.create_job(
             job_id="privacy-cancel", project_id=project.id, workflow="review", profile="balanced",
-            prompt="cancel", execution_plan_json="{}", session="cancel",
+            prompt="cancel", plan_json="{}", session="cancel",
         )
         responses.append(await client.call_tool("cancel", {"job_id": "privacy-cancel"}))
         runtime.database.create_job(
             job_id="privacy-retry", project_id=project.id, workflow="review", profile="balanced",
-            prompt="retry", execution_plan_json="{}", session="retry",
+            prompt="retry", plan_json="{}", session="retry",
         )
         runtime.database.finish_job("privacy-retry", "failed")
-        responses.append(await client.call_tool("retry", {"job_id": "privacy-retry"}))
+        responses.append(await client.call_tool("submit", {"path": str(root), "from_job": "privacy-retry"}))
 
-        forbidden = {"access_mode", "target_id", "backend", "resource_uri", "config_revision"}
+        forbidden = {"access_mode", "backend", "resource_uri", "config_revision"}
         def visit(value):
             if isinstance(value, dict):
                 assert forbidden.isdisjoint(key.casefold() for key in value)
@@ -511,7 +535,7 @@ async def test_all_tool_success_payloads_are_private_and_single_text_content(tmp
 
 
 @pytest.mark.asyncio
-async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, monkeypatch) -> None:
+async def test_submit_from_job_cancel_overflow_reports_applied_root_ids(tmp_path, monkeypatch) -> None:
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
         root = tmp_path / "mutation-overflow"
         root.mkdir()
@@ -531,21 +555,21 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
 
         runtime.database.create_job(
             job_id="retry-overflow", project_id=project.id, workflow="review", profile="balanced",
-            prompt="retry", execution_plan_json="{}", session="r" * 10000,
+            prompt="retry", plan_json="{}", session="r" * 10000,
         )
         runtime.database.finish_job("retry-overflow", "failed")
-        retried = await client.call_tool("retry", {"job_id": "retry-overflow"})
+        retried = await client.call_tool("submit", {"path": str(root), "from_job": "retry-overflow"})
         assert retried.is_error
         retry_error = json.loads(retried.content[0].text)
         retried_id = retry_error["message"].split("ID: ", 1)[1].rstrip(".")
         assert retry_error["code"] == "response_too_large"
         assert "applied" in retry_error["message"]
-        assert runtime.database.job(retried_id).retry_of == "retry-overflow"
+        assert runtime.database.job(retried_id).from_job == "retry-overflow"
         assert runtime.database.job("retry-overflow").state == "failed"
 
         runtime.database.create_job(
             job_id="cancel-overflow", project_id=project.id, workflow="review", profile="balanced",
-            prompt="cancel", execution_plan_json="{}", session="c" * 10000,
+            prompt="cancel", plan_json="{}", session="c" * 10000,
         )
         cancelled = await client.call_tool("cancel", {"job_id": "cancel-overflow"})
         assert cancelled.is_error
@@ -560,7 +584,7 @@ async def test_submit_retry_cancel_overflow_reports_applied_root_ids(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_record(tmp_path, monkeypatch) -> None:
-    from refract.drivers import DriverResult
+    from refract.runner.drivers import DriverResult
 
     marker = "provider-secret-model-backend-detail-" + "private-diagnostic-" * 700
 
@@ -585,10 +609,10 @@ async def test_failed_driver_diagnostic_is_private_but_remains_in_operator_recor
             "path": str(root), "workflow": "implement", "prompt": "fail safely",
         })
         job_id = json.loads(submitted.content[0].text)["job"]["id"]
-        response = await client.call_tool("wait", {"job_id": job_id, "timeout_s": 10})
+        response = await client.call_tool("wait", {"job_ids": [job_id], "timeout_s": 10})
         assert not response.is_error
         payload = json.loads(response.content[0].text)
-        assert payload["result"]["failure_kind"] == "target_fatal"
+        assert payload["failure_kind"] == "target_fatal"
         assert marker not in response.content[0].text
         assert "provider-secret-model-backend-detail" not in response.content[0].text
         envelope = json.dumps(response.model_dump(by_alias=True, mode="json", exclude_none=True), separators=(",", ":"))
@@ -618,18 +642,21 @@ def _stub_project(_project_id: str) -> None:
     return None
 
 
-def _stub_result_path(job_id: str) -> str:
-    return f"{job_id}.md"
+_STUB_RESULTS_DIR = Path(tempfile.mkdtemp(prefix="refract-test-results-"))
 
 
-_STUB_ASK_REGISTRY = SimpleNamespace(get_pending=lambda _job_id: None)
+async def _no_pending(_job_id: str) -> None:
+    return None
+
+
+_STUB_ASK_REGISTRY = SimpleNamespace(get_pending=lambda _job_id: None, pending=_no_pending)
 
 
 def test_wait_constants() -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    assert server._MCP_WAIT_TIMEOUT_S == 3600
-    assert server._MCP_HEARTBEAT_INTERVAL_S == 30
+    assert tools._MCP_WAIT_TIMEOUT_S == 3600
+    assert tools._MCP_HEARTBEAT_INTERVAL_S == 30
 
 
 @pytest.mark.asyncio
@@ -646,9 +673,9 @@ async def test_wait_uses_timeout_and_returns_result_shape(timeout_s: int) -> Non
             return state["job"]
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -669,21 +696,21 @@ async def test_wait_uses_timeout_and_returns_result_shape(timeout_s: int) -> Non
         request_context=SimpleNamespace(lifespan_context=Runtime()),
         report_progress=report_progress,
     )
-    result = json.loads(await wait(initial.id, ctx, timeout_s=timeout_s))
+    result = json.loads(await wait([initial.id], ctx, timeout_s=timeout_s))
 
     assert waits == ([] if timeout_s == 0 else [(initial.id, timeout_s)])
     assert result["job"]["state"] == ("running" if timeout_s == 0 else "succeeded")
-    assert result["result"]["text"] == ""
-    assert result["result"]["truncated"] is False
-    assert result["result"]["pending_question"] is None
+    assert result["result"] == ""
+    assert result["truncated"] is False
+    assert result["pending_question"] is None
     assert json.loads(progress_messages[0]) == {"state": "running"}
 
 
 @pytest.mark.asyncio
 async def test_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
     done_event = asyncio.Event()
     progress_reports: list[tuple[float, float | None, str]] = []
@@ -694,9 +721,9 @@ async def test_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) 
             return current_job
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -718,7 +745,7 @@ async def test_wait_heartbeat_loop_reports_progress_until_terminal(monkeypatch) 
         report_progress=report_progress,
     )
 
-    result = json.loads(await wait(current_job.id, ctx, timeout_s=3600))
+    result = json.loads(await wait([current_job.id], ctx, timeout_s=3600))
     assert result["job"]["state"] == "succeeded"
     assert [report[:2] for report in progress_reports] == [
         (0.0, None),
@@ -735,16 +762,16 @@ async def test_wait_rejects_negative_timeout_before_job_lookup(tmp_path, monkeyp
             raise AssertionError("job lookup should not happen")
 
         monkeypatch.setattr(runtime.database, "job", unexpected_lookup)
-        result = await client.call_tool("wait", {"job_id": "job-1", "timeout_s": -1})
+        result = await client.call_tool("wait", {"job_ids": ["job-1"], "timeout_s": -1})
         assert result.is_error
         assert json.loads(result.content[0].text)["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
 async def test_wait_non_terminal_timeout(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
     progress_messages: list[str] = []
     timeout_event = asyncio.Event()
@@ -755,9 +782,9 @@ async def test_wait_non_terminal_timeout(monkeypatch) -> None:
             return current_job
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -778,9 +805,9 @@ async def test_wait_non_terminal_timeout(monkeypatch) -> None:
         report_progress=report_progress,
     )
 
-    result = json.loads(await wait(current_job.id, ctx, timeout_s=10))
+    result = json.loads(await wait([current_job.id], ctx, timeout_s=10))
     assert result["job"]["state"] == "running"
-    assert result["result"]["text"] == ""
+    assert result["result"] == ""
     assert len(progress_messages) == 3
 
 
@@ -796,9 +823,9 @@ async def test_wait_cancellation_cleanup() -> None:
             return current_job
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -818,7 +845,7 @@ async def test_wait_cancellation_cleanup() -> None:
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
 
-    task = asyncio.create_task(wait(current_job.id, ctx, timeout_s=3600))
+    task = asyncio.create_task(wait([current_job.id], ctx, timeout_s=3600))
     await wait_started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -828,9 +855,9 @@ async def test_wait_cancellation_cleanup() -> None:
 
 @pytest.mark.asyncio
 async def test_wait_propagates_cancellation_during_child_cleanup(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     current_job = _job_view("running")
     cleanup_started = asyncio.Event()
 
@@ -839,9 +866,9 @@ async def test_wait_propagates_cancellation_during_child_cleanup(monkeypatch) ->
             return current_job
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -861,7 +888,7 @@ async def test_wait_propagates_cancellation_during_child_cleanup(monkeypatch) ->
         request_context=SimpleNamespace(lifespan_context=Runtime()),
         report_progress=lambda **kwargs: asyncio.sleep(0),
     )
-    task = asyncio.create_task(wait(current_job.id, ctx, timeout_s=3600))
+    task = asyncio.create_task(wait([current_job.id], ctx, timeout_s=3600))
     try:
         await asyncio.wait_for(cleanup_started.wait(), 2)
         task.cancel()
@@ -874,23 +901,24 @@ async def test_wait_propagates_cancellation_during_child_cleanup(monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_wait_response_truncates_long_text_and_keeps_result_path() -> None:
-    from refract import server
+    from refract.api.mcp import app as server
     from refract.models import JobResult
 
     terminal = _job_view("succeeded").model_copy(update={"result": JobResult(text="x" * 200_000)})
 
     class Database:
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
-    payload = json.loads(await server._wait_response(Runtime(), terminal))
-    assert payload["result"]["truncated"] is True
-    assert 0 < len(payload["result"]["text"]) < 200_000
-    assert payload["result"]["result_path"] == "job-1.md"
+    payload = json.loads(await tools._job_response(Runtime(), terminal))
+    assert payload["truncated"] is True
+    assert 0 < len(payload["result"]) < 200_000
+    assert Path(payload["result_path"]) == _STUB_RESULTS_DIR / "job-1.md"
+    assert Path(payload["result_path"]).read_text(encoding="utf-8") == "x" * 200_000
 
 
 @pytest.mark.asyncio
@@ -904,10 +932,11 @@ async def test_wait_returns_terminal_job_without_waiting() -> None:
         def job(job_id: str) -> JobView:
             return terminal
 
+        executor = None  # run_on(None, ...) falls back to the default executor for this stub
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -929,7 +958,7 @@ async def test_wait_returns_terminal_job_without_waiting() -> None:
         report_progress=report_progress,
     )
 
-    result = json.loads(await wait(terminal.id, ctx))
+    result = json.loads(await wait([terminal.id], ctx))
     assert result["job"]["state"] == "failed"
     assert waits == []
     assert json.loads(progress_messages[0]) == {"state": "failed"}
@@ -963,9 +992,9 @@ async def test_wait_logs_progress_token_presence(caplog, wire_meta, expected_pre
             return terminal
 
         project = staticmethod(_stub_project)
-        result_path = staticmethod(_stub_result_path)
+        results_dir = _STUB_RESULTS_DIR
 
-    class Runtime:
+    class Runtime(_WaitShim):
         database = Database()
         ask_registry = _STUB_ASK_REGISTRY
 
@@ -993,7 +1022,7 @@ async def test_wait_logs_progress_token_presence(caplog, wire_meta, expected_pre
     )
 
     with caplog.at_level(logging.INFO, logger="refract.server"):
-        result = json.loads(await wait(terminal.id, ctx))
+        result = json.loads(await wait([terminal.id], ctx))
 
     assert result["job"]["state"] == "succeeded"
     records = [
@@ -1013,12 +1042,12 @@ async def test_wait_logs_progress_token_presence(caplog, wire_meta, expected_pre
 
 @pytest.mark.asyncio
 async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) -> None:
-    import refract.server as server
+    from refract.api.mcp import app as server
 
     config = SimpleNamespace(logging=object())
     events: list[str] = []
 
-    class Runtime:
+    class Runtime(_WaitShim):
         def __init__(self, received_config) -> None:
             assert received_config is config
             events.append("runtime.create")
@@ -1042,7 +1071,7 @@ async def test_application_lifespan_shares_runtime_across_sessions(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -> None:
-    import refract.server as server
+    from refract.api.mcp import app as server
 
     config = SimpleNamespace(logging=object())
     events: list[str] = []
@@ -1071,7 +1100,7 @@ async def test_application_lifespan_cleans_up_after_start_failure(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_application_lifespan_clears_state_when_runtime_close_fails(monkeypatch) -> None:
-    import refract.server as server
+    from refract.api.mcp import app as server
 
     config = SimpleNamespace(logging=object())
 
@@ -1110,7 +1139,7 @@ async def test_runtime_wait_and_wait_tool_wake_early_with_pending_question(tmp_p
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1138,13 +1167,12 @@ async def test_runtime_wait_and_wait_tool_wake_early_with_pending_question(tmp_p
             request_context=SimpleNamespace(lifespan_context=runtime),
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
-        res_str = await wait("job-q-1", ctx, timeout_s=10)
+        res_str = await wait(["job-q-1"], ctx, timeout_s=10)
         res = json.loads(res_str)
         assert res["job"]["state"] == "running"
-        assert "pending_question" in res["result"]
-        pq = res["result"]["pending_question"]
+        pq = res["pending_question"]
         assert pq["text"] == "Need input on schema"
-        assert pq["question_id"].startswith("q_")
+        assert pq["question_id"].isdigit()  # DB row id; the in-memory "q_" prefix is gone
 
         # 3. Test answer delivers answer
         ans_str = await answer("job-q-1", "Use v2 schema", ctx)
@@ -1174,7 +1202,7 @@ async def test_answer_errors(tmp_path) -> None:
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         runtime.database.create_job(
@@ -1183,7 +1211,7 @@ async def test_answer_errors(tmp_path) -> None:
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1228,7 +1256,7 @@ async def test_wait_nonterminal_without_question(tmp_path) -> None:
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1239,12 +1267,12 @@ async def test_wait_nonterminal_without_question(tmp_path) -> None:
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
 
-        res_str = await wait("job-running-no-q", ctx, timeout_s=0)
+        res_str = await wait(["job-running-no-q"], ctx, timeout_s=0)
         res = json.loads(res_str)
         assert res["job"]["state"] == "running"
-        assert res["result"]["text"] == ""
-        assert res["result"]["truncated"] is False
-        assert res["result"]["pending_question"] is None
+        assert res["result"] == ""
+        assert res["truncated"] is False
+        assert res["pending_question"] is None
     finally:
         runtime.database.close()
 
@@ -1259,7 +1287,7 @@ async def test_connected_client_answer_and_wait(tmp_path, monkeypatch) -> None:
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1274,11 +1302,11 @@ async def test_connected_client_answer_and_wait(tmp_path, monkeypatch) -> None:
         task = asyncio.create_task(_ask_later())
 
         # wait wakes early
-        wait_res = await client.call_tool("wait", {"job_id": "job-client-test", "timeout_s": 10})
+        wait_res = await client.call_tool("wait", {"job_ids": ["job-client-test"], "timeout_s": 10})
         assert not wait_res.is_error
         wait_data = json.loads(wait_res.content[0].text)
         assert wait_data["job"]["state"] == "running"
-        assert wait_data["result"]["pending_question"]["text"] == "Question via client"
+        assert wait_data["pending_question"]["text"] == "Question via client"
 
         # answer delivers
         ans_res = await client.call_tool("answer", {"job_id": "job-client-test", "answer": "Answer via client"})
@@ -1300,7 +1328,7 @@ async def test_answer_bounds_and_unicode_acceptance(tmp_path, monkeypatch) -> No
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1351,7 +1379,7 @@ async def test_wait_oversized_pending_question_raises_response_too_large(tmp_pat
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1369,7 +1397,7 @@ async def test_wait_oversized_pending_question_raises_response_too_large(tmp_pat
             report_progress=lambda **kwargs: asyncio.sleep(0),
         )
         with pytest.raises(RefractError) as exc_info:
-            await wait("job-oversized-q", ctx, timeout_s=0)
+            await wait(["job-oversized-q"], ctx, timeout_s=0)
         assert exc_info.value.code == "response_too_large"
     finally:
         runtime.database.close()
@@ -1378,13 +1406,13 @@ async def test_wait_oversized_pending_question_raises_response_too_large(tmp_pat
 @pytest.mark.asyncio
 async def test_real_asgi_ask_and_mcp_wait_answer_integration(tmp_path, monkeypatch) -> None:
     from starlette.applications import Starlette
-    from refract.dashboard import register_dashboard_routes
+    from refract.api.http.routes import register_dashboard_routes
 
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        from refract import server
+        from refract.api.mcp import app as server
         state = [obj for obj in gc.get_objects() if type(obj).__name__ == "DashboardState" and getattr(obj, "runtime", None) is runtime][0] if "gc" in globals() else None
         # Build ASGI app with real dashboard routes pointing to the same runtime
-        from refract.dashboard import DashboardState
+        from refract.api.http.common import DashboardState
         dash_state = DashboardState()
         dash_state.runtime = runtime
         app = Starlette(routes=register_dashboard_routes(dash_state))
@@ -1396,7 +1424,7 @@ async def test_real_asgi_ask_and_mcp_wait_answer_integration(tmp_path, monkeypat
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1436,11 +1464,11 @@ async def test_real_asgi_ask_and_mcp_wait_answer_integration(tmp_path, monkeypat
         asgi_task = asyncio.create_task(app(scope, receive, send))
 
         # 2. Call wait via MCP -> wakes early with pending_question
-        wait_res = await client.call_tool("wait", {"job_id": "job-asgi-1", "timeout_s": 15})
+        wait_res = await client.call_tool("wait", {"job_ids": ["job-asgi-1"], "timeout_s": 15})
         assert not wait_res.is_error
         wait_data = json.loads(wait_res.content[0].text)
         assert wait_data["job"]["state"] == "running"
-        assert wait_data["result"]["pending_question"]["text"] == "Need ASGI confirmation?"
+        assert wait_data["pending_question"]["text"] == "Need ASGI confirmation?"
 
         # 3. Call answer via MCP -> delivers answer
         ans_res = await client.call_tool("answer", {"job_id": "job-asgi-1", "answer": "Confirmed via MCP"})
@@ -1471,23 +1499,22 @@ async def test_runtime_wait_scheduler_exception_and_task_cleanup(tmp_path) -> No
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
             runtime.database._connection.execute("UPDATE jobs SET state='running' WHERE id='job-err-1'")
 
-        async def _failing_scheduler_wait(job_id, timeout_s):
-            await asyncio.sleep(0.01)
+        def _failing_snapshot(job_ids):
             raise RuntimeError("scheduler simulated failure")
 
-        runtime.scheduler.wait = _failing_scheduler_wait
+        runtime.database.wait_snapshot = _failing_snapshot
 
         with pytest.raises(RuntimeError, match="scheduler simulated failure"):
             await runtime.wait("job-err-1", timeout_s=5)
 
-        # Question waiter must be cleaned up
-        assert not runtime.ask_registry._question_waiters.get("job-err-1")
+        # The hub subscription must be removed
+        assert runtime.hub.subscriber_count == 0
     finally:
         runtime.database.close()
 
@@ -1507,7 +1534,7 @@ async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) 
             workflow="consult",
             profile="balanced",
             prompt="Do work",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="c1",
         )
         with runtime.database._connection:
@@ -1534,26 +1561,38 @@ async def test_runtime_wait_indefinite_on_timeout_zero_until_question(tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_question_waiter_cleanup_on_timeout_and_cancellation(tmp_path) -> None:
+async def test_wait_subscriber_cleanup_on_timeout_and_cancellation(tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     config_path = home / "config.toml"
     config_path.write_text(_serve_config(), encoding="utf-8")
     runtime = Runtime(load_config(config_path))
     try:
+        project = register_project(runtime, str(tmp_path))
+        runtime.database.create_job(
+            job_id="job-waiter-1",
+            project_id=project.id,
+            workflow="consult",
+            profile="balanced",
+            prompt="Do work",
+            plan_json="{}",
+            session="c1",
+        )
+        runtime.database.start_job("job-waiter-1")
+
         # 1. Cleanup on timeout
-        res = await runtime.ask_registry.wait_question("job-waiter-1", timeout_s=0.02)
-        assert res is None
-        assert "job-waiter-1" not in runtime.ask_registry._question_waiters
+        job = await runtime.wait("job-waiter-1", timeout_s=0.02)
+        assert job.state == "running"
+        assert runtime.hub.subscriber_count == 0
 
         # 2. Cleanup on cancellation
-        task = asyncio.create_task(runtime.ask_registry.wait_question("job-waiter-2", timeout_s=10.0))
+        task = asyncio.create_task(runtime.wait("job-waiter-1", timeout_s=10.0))
         await asyncio.sleep(0.01)
-        assert "job-waiter-2" in runtime.ask_registry._question_waiters
+        assert runtime.hub.subscriber_count == 1
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
-        assert "job-waiter-2" not in runtime.ask_registry._question_waiters
+        assert runtime.hub.subscriber_count == 0
     finally:
         runtime.database.close()
 
@@ -1582,7 +1621,7 @@ _ARRAY_SCHEMA = {
 
 
 def test_raw_argument_error_checks_array_fields() -> None:
-    from refract.server import _raw_argument_error
+    from refract.api.mcp.responses import _raw_argument_error
 
     assert not _raw_argument_error(_ARRAY_SCHEMA, {"path": "p", "job_ids": ["a", "b"]})
     assert not _raw_argument_error(_ARRAY_SCHEMA, {"path": "p", "job_ids": []})
@@ -1607,7 +1646,7 @@ def _linkable_job(runtime, path, job_id: str) -> str:
     project = register_project(runtime, str(path))
     runtime.database.create_job(
         job_id=job_id, project_id=project.id, workflow="implement", profile="default",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
     return job_id
 
@@ -1709,7 +1748,7 @@ async def test_card_list_is_scoped_to_the_resolved_project(tmp_path, monkeypatch
 
 @pytest.mark.asyncio
 async def test_card_list_returns_largest_fitting_prefix(tmp_path, monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
     root = _project(tmp_path)
     async with _connected_client(tmp_path, monkeypatch) as (client, _runtime):
@@ -1720,7 +1759,7 @@ async def test_card_list_returns_largest_fitting_prefix(tmp_path, monkeypatch) -
         assert full["truncated"] is False
         assert full["omitted"] == 0
 
-        monkeypatch.setattr(server, "_MAX_RESPONSE_BYTES", 1500)
+        monkeypatch.setattr(responses, "MAX_RESPONSE_BYTES", 1500)
         error, partial = await _card_call(client, "card_list", {"path": str(root)})
         assert not error
         kept = partial["cards"]
@@ -1728,19 +1767,19 @@ async def test_card_list_returns_largest_fitting_prefix(tmp_path, monkeypatch) -
         assert kept == full["cards"][: len(kept)]
         assert partial["truncated"] is True
         assert partial["omitted"] == 8 - len(kept)
-        assert server._fits_response(server._json(partial))
-        assert not server._fits_response(
-            server._json({"cards": full["cards"][: len(kept) + 1], "truncated": True, "omitted": 8 - len(kept) - 1})
+        assert responses._fits_response(responses._json(partial))
+        assert not responses._fits_response(
+            responses._json({"cards": full["cards"][: len(kept) + 1], "truncated": True, "omitted": 8 - len(kept) - 1})
         )
 
 
 @pytest.mark.asyncio
 async def test_oversized_card_create_and_move_report_the_applied_card(tmp_path, monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
     root = _project(tmp_path)
     async with _connected_client(tmp_path, monkeypatch) as (client, runtime):
-        monkeypatch.setattr(server, "_fits_response", lambda text, *, is_error=False: is_error or not text.startswith('{"card"'))
+        monkeypatch.setattr(responses, "_fits_response", lambda text, *, is_error=False: is_error or not text.startswith('{"card"'))
         error, created = await _card_call(client, "card_create", {"path": str(root), "title": "big"})
         assert error
         assert created["code"] == "response_too_large"
@@ -1758,14 +1797,14 @@ async def test_oversized_card_create_and_move_report_the_applied_card(tmp_path, 
 
 
 def test_instructions_name_card_tools_within_limit() -> None:
-    from refract.server import _INSTRUCTIONS
+    from refract.api.mcp.app import INSTRUCTIONS as _INSTRUCTIONS
 
     assert len(_INSTRUCTIONS) <= 2048
     assert all(name in _INSTRUCTIONS for name in ("card_create", "card_move", "card_list"))
 
 
 def test_unknown_tool_hint_does_not_state_a_count() -> None:
-    from refract.server import _normalize_tool_error
+    from refract.api.mcp.responses import _normalize_tool_error
 
     wire = {"content": [{"type": "text", "text": "Error executing tool nope: Unknown tool: nope"}], "isError": True}
     payload = json.loads(_normalize_tool_error(wire, "nope", "").content[0].text)
@@ -1773,7 +1812,7 @@ def test_unknown_tool_hint_does_not_state_a_count() -> None:
     assert payload["next_action"] == "Use one of the tools returned by tools/list."
 
 
-class _ProgressRuntime:
+class _ProgressRuntime(_WaitShim):
     """Runtime double whose wait() blocks until released; database.job() replays scripted views."""
 
     def __init__(self, views: list[JobView | None], wait_error: Exception | None = None) -> None:
@@ -1807,57 +1846,57 @@ def _progress_context(reports: list[tuple[float, float | None, str]], runtime: _
 
 @pytest.mark.asyncio
 async def test_wait_with_progress_reports_each_heartbeat_with_incrementing_progress(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     runtime = _ProgressRuntime([_job_view("running")] * 2)
     reports: list[tuple[float, float | None, str]] = []
-    await server._wait_with_progress(runtime, _progress_context(reports, runtime), "job-1", 5)
+    await tools._wait_with_progress(runtime, _progress_context(reports, runtime), ["job-1"], 5)
     assert reports == [(1.0, None, '{"state":"running"}'), (2.0, None, '{"state":"running"}')]
 
 
 @pytest.mark.asyncio
 async def test_wait_with_progress_stops_without_report_when_job_is_terminal(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     runtime = _ProgressRuntime([_job_view("succeeded")])
     reports: list[tuple[float, float | None, str]] = []
-    await server._wait_with_progress(runtime, _progress_context(reports), "job-1", 5)
+    await tools._wait_with_progress(runtime, _progress_context(reports), ["job-1"], 5)
     assert reports == []
 
 
 @pytest.mark.asyncio
 async def test_wait_with_progress_unknown_job_raises_and_cancels_wait(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     runtime = _ProgressRuntime([None])
     context = _progress_context([])
     with pytest.raises(OrchestrationError, match="Job does not exist.") as raised:
-        await server._wait_with_progress(runtime, context, "job-1", 5)
+        await tools._wait_with_progress(runtime, context, ["job-1"], 5)
     assert (raised.value.code, raised.value.next_action) == ("unknown_job", "Call list with the project path and use a listed job ID.")
 
 
 @pytest.mark.asyncio
 async def test_wait_with_progress_logs_wait_cleanup_failure(monkeypatch, caplog) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     runtime = _ProgressRuntime([None], wait_error=RuntimeError("cleanup broke"))
     context = _progress_context([])
     with caplog.at_level("WARNING"), pytest.raises(OrchestrationError, match="Job does not exist.") as raised:
-        await server._wait_with_progress(runtime, context, "job-1", 5)
+        await tools._wait_with_progress(runtime, context, ["job-1"], 5)
     assert raised.value.code == "unknown_job"
     record = next(r for r in caplog.records if r.getMessage() == "Job wait cleanup failed")
-    assert (record.event, record.job_id) == ("job.wait_cleanup_failed", "job-1")
+    assert (record.event, record.job_ids) == ("job.wait_cleanup_failed", ["job-1"])
 
 
 @pytest.mark.asyncio
 async def test_wait_with_progress_nonpositive_heartbeat_uses_thirty_seconds(monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
 
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0)
     timeouts: list[float] = []
     real_wait_for = asyncio.wait_for
 
@@ -1865,9 +1904,9 @@ async def test_wait_with_progress_nonpositive_heartbeat_uses_thirty_seconds(monk
         timeouts.append(timeout)
         return await real_wait_for(awaitable, timeout=0.001)
 
-    monkeypatch.setattr(server.asyncio, "wait_for", recording_wait_for)
+    monkeypatch.setattr(tools.asyncio, "wait_for", recording_wait_for)
     runtime = _ProgressRuntime([_job_view("succeeded")])
-    await server._wait_with_progress(runtime, _progress_context([]), "job-1", 5)
+    await tools._wait_with_progress(runtime, _progress_context([]), ["job-1"], 5)
     assert timeouts == [30.0]
 
 
@@ -1916,7 +1955,7 @@ def _v2026_call(client, tool: str, arguments: dict, *, progress_token: str | Non
 def v2026_http(tmp_path, monkeypatch):
     from starlette.testclient import TestClient
 
-    from refract import server
+    from refract.api.mcp import app as server
     from tests.orchestration_helpers import config as make_config
 
     monkeypatch.setattr(server, "configure_logging", lambda _settings: None)
@@ -1938,24 +1977,24 @@ def test_v2026_http_tools_list_returns_the_nine_tools(v2026_http) -> None:
     assert response.status_code == 200, response.text
     tools = _v2026_messages(response)[-1]["result"]["tools"]
     assert {tool["name"] for tool in tools} == {
-        "submit", "wait", "answer", "cancel", "retry", "list", "card_create", "card_move", "card_list",
+        "submit", "get", "wait", "answer", "cancel", "list", "card_create", "card_move", "card_list",
     }
     assert len(tools) == 9
 
 
 def test_v2026_http_submit_wait_progress_and_cancel(v2026_http, tmp_path, monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
     from tests.orchestration_helpers import BlockingDrivers, repository
 
     client, runtime = v2026_http
-    monkeypatch.setattr(server, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
+    monkeypatch.setattr(tools, "_MCP_HEARTBEAT_INTERVAL_S", 0.005)
     runtime.drivers = BlockingDrivers()
     root = repository(tmp_path)
 
     submitted = _v2026_call(client, "submit", {"path": str(root), "workflow": "consult", "prompt": "inspect"})[-1]
     job_id = json.loads(submitted["result"]["content"][0]["text"])["job"]["id"]
 
-    messages = _v2026_call(client, "wait", {"job_id": job_id, "timeout_s": 1}, progress_token="p1")
+    messages = _v2026_call(client, "wait", {"job_ids": [job_id], "timeout_s": 1}, progress_token="p1")
     progress = [m for m in messages if m.get("method") == "notifications/progress"]
     assert progress, messages
     assert all(m["params"]["progressToken"] == "p1" for m in progress)
@@ -1969,7 +2008,7 @@ def test_v2026_http_submit_wait_progress_and_cancel(v2026_http, tmp_path, monkey
 
 def test_v2026_http_refract_error_matches_2025_payload(v2026_http) -> None:
     client, _runtime = v2026_http
-    message = _v2026_call(client, "wait", {"job_id": "missing-job", "timeout_s": 0})[-1]
+    message = _v2026_call(client, "wait", {"job_ids": ["missing-job"], "timeout_s": 0})[-1]
     assert message["result"]["isError"] is True
     payload = json.loads(message["result"]["content"][0]["text"])
     assert set(payload) == {"code", "message", "next_action"}
@@ -1978,7 +2017,7 @@ def test_v2026_http_refract_error_matches_2025_payload(v2026_http) -> None:
 
 
 def test_create_application_never_expires_idle_2025_sessions(tmp_path, monkeypatch) -> None:
-    from refract import server
+    from refract.api.mcp import app as server
     from tests.orchestration_helpers import config as make_config
 
     monkeypatch.setattr(server, "configure_logging", lambda _settings: None)

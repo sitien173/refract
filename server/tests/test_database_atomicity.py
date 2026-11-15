@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from refract.database import Database
+from refract.store.database import Database
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def database(tmp_path):
 
 def create_job(db):
     db.create_job(job_id="j", project_id="p", workflow="consult", profile="p",
-                  prompt="hello", execution_plan_json="{}", session="k")
+                  prompt="hello", plan_json="{}", session="k")
 
 
 def test_fresh_success_rolls_back_session_and_result(database):

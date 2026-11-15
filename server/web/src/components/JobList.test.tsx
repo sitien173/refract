@@ -12,7 +12,7 @@ const makeJob = (overrides: Partial<JobSummary>): JobSummary => ({
   profile: "default",
   target: "local",
   session: "ses-1",
-  retry_of: null,
+  from_job: "",
   failure_kind: null,
   created_at: "2026-11-08T11:00:00Z",
   updated_at: "2026-11-08T11:55:00Z",

@@ -133,7 +133,7 @@ For folder plans, `executing-plans` owns the phase-file checkpoint.
 1. Submit one prompt-only `implement` job with the saved route, built from
    [implementer-prompt.md](../executing-plans/implementer-prompt.md). Its
    prompt names the absolute `phase-<NN>/prompt.md` path.
-2. Wait for the terminal result. Answer each `result.pending_question` from
+2. Wait for the terminal result. Answer each `pending_question` from
    the plan or the user.
 3. Diff the working tree against the recorded HEAD. Compare it with ERP
    `FILES MODIFIED` and the phase file set. An undeclared or out-of-scope path
@@ -146,11 +146,11 @@ For folder plans, `executing-plans` owns the phase-file checkpoint.
 | `BLOCKED` | No checkpoint. Answer each `CLARIFICATIONS NEEDED` item from the plan or the user, then submit one resumed job carrying only the answers. |
 | `CONTINUE_CONTEXT` | Validate what exists and checkpoint if it passes. Submit one resumed job saying "Continue Phase <NN>". |
 | ERP block or `NEXT` missing | Submit one resumed job asking for the ERP response of the current state. |
-| Job failed, cancelled, or interrupted | Partial changes remain on disk. Reconcile and report them, then read `result.failure_kind` and apply [Recovery](references/tool-contract.md#recovery): `retry(job_id)` once onto `result.next_target` if the prompt and file set still hold; otherwise submit a new job. |
+| Job failed, cancelled, or interrupted | Partial changes remain on disk. Reconcile and report them, then read `failure_kind` and apply [Recovery](references/tool-contract.md#recovery): `submit(from_job=<job id>)` once onto `next_target` if the prompt and file set still hold; otherwise submit a new job. The server already retries, opens a fresh session, and falls back on its own when `replay_safe`. |
 
 Bounds: two `BLOCKED` rounds, two continuations, and one ERP re-request per
 phase. Past a bound, or on any unanswerable clarification, set handover
-`BLOCKED` and report. A retry does not reset the tree. All recovery is your own
+`BLOCKED` and report. A `from_job` submit does not reset the tree. All recovery is your own
 Git.
 
 ## Gate 3: Review

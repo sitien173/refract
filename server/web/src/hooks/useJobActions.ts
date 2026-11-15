@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { DashboardApiError, postJobAction } from "../api";
+import { DashboardApiError, postJobAction, submitFromJob } from "../api";
 
 export type JobActionName = "cancel" | "retry" | "answer";
 
@@ -12,11 +12,12 @@ type Options = {
   /** Called when an answer was rejected because the question is no longer pending. */
   onStaleQuestion?: () => void;
   post?: typeof postJobAction;
+  submit?: typeof submitFromJob;
 };
 
 const isStaleQuestion = (error: unknown) => error instanceof DashboardApiError && error.status === 409 && error.code === "invalid_state";
 
-export function useJobActions({ jobId, announce, onRetried, onStaleQuestion, post = postJobAction }: Options) {
+export function useJobActions({ jobId, announce, onRetried, onStaleQuestion, post = postJobAction, submit = submitFromJob }: Options) {
   const queryClient = useQueryClient();
 
   const cancelMutation = useMutation({
@@ -39,7 +40,7 @@ export function useJobActions({ jobId, announce, onRetried, onStaleQuestion, pos
   const retryMutation = useMutation({
     mutationFn: async () => {
       if (!jobId) return;
-      return post(jobId, "retry", {});
+      return submit(jobId);
     },
     retry: false,
     onSuccess: (result) => {

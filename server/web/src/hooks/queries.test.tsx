@@ -13,7 +13,7 @@ const sampleDetail = (id: string, state = "running"): JobDetail => ({
   profile: null,
   target: null,
   session: null,
-  retry_of: null,
+  from_job: "",
   failure_kind: null,
   created_at: "2026-11-07T00:00:00Z",
   updated_at: "2026-11-07T00:00:00Z",
@@ -40,7 +40,7 @@ describe("queries hook", () => {
     vi.useRealTimers();
   });
 
-  it("polls job detail at 1 s intervals while running", async () => {
+  it("polls job detail at 30 s intervals while running", async () => {
     const queryClient = createTestQueryClient();
     const load = vi.fn().mockImplementation((id: string) => Promise.resolve(sampleDetail(id, "running")));
 
@@ -55,12 +55,17 @@ describe("queries hook", () => {
     expect(load).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(29_999);
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(load).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(load).toHaveBeenCalledTimes(3);
   });
@@ -159,7 +164,7 @@ describe("queries hook", () => {
     expect(hook.result.current.data).toEqual(targetsData);
   });
 
-  it("polls board cards at 1 s intervals and switches to 5 s after an error", async () => {
+  it("polls board cards at 30 s intervals and switches to 5 s after an error", async () => {
     const queryClient = createTestQueryClient();
     let fail = false;
     const cardsData = { cards: [], truncated: false, options: { projects: [] } };
@@ -178,14 +183,14 @@ describe("queries hook", () => {
     expect(load).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(load).toHaveBeenCalledTimes(2);
 
     // Error on next poll
     fail = true;
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(load).toHaveBeenCalledTimes(3);
 

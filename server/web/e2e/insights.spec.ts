@@ -20,11 +20,15 @@ test("insights shows seeded job metrics and switches the window", async ({ page 
     await expect(breakdownTable.getByRole("columnheader", { name: heading })).toBeVisible();
   }
   await expect(page.getByRole("table", { name: "Tokens by model" }).getByRole("row", { name: /^e2e / })).toBeVisible();
-  await expect(page.getByText("Unpriced models: e2e.")).toBeVisible();
+
+  // Other jobs add initial attempts on the same daemon, so compare windows rather than absolute counts.
+  const initialAttempts = async () => Number((await page.getByText("Initial attempts", { exact: true }).locator("xpath=following-sibling::dd").innerText()).replace(/,/g, ""));
+  const initialIn7Days = await initialAttempts();
 
   await page.getByRole("button", { name: "30 days" }).click();
   await expect(page.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "true");
   await expect(seededJobs).toHaveText("102");
+  await expect.poll(initialAttempts).toBeGreaterThanOrEqual(initialIn7Days + 1);
 
   await page.getByRole("button", { name: "1 day" }).click();
   await expect(seededJobs).toHaveText("101");

@@ -2,7 +2,8 @@ import os
 
 import pytest
 
-from refract import cli, server
+from refract import cli
+from refract.api.mcp import app as server
 from refract.logging_setup import resolve_config
 from tests.orchestration_helpers import config
 
