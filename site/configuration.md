@@ -8,6 +8,8 @@ nav_order: 4
 
 The daemon reads `~/.refract/config.toml`. Set `REFRACT_HOME` to use another state directory. [`config.v3.toml`](https://github.com/sitien173/refract/blob/main/server/config.v3.toml) is a complete example covering every key.
 
+The file must set `schema_version = 1` at the top level. A missing `schema_version` or an unknown key stops the daemon with `config_invalid`, a `loc`, and a fix hint. An unknown `retry.codes` value fails at its `loc`.
+
 The daemon reloads targets and profiles on the next tool call after the file changes. A `[daemon]` host or port change needs a restart.
 
 ## `[daemon]`
@@ -40,7 +42,7 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 | `args` | Extra CLI options, one token per array item |
 | `max_concurrency` | Jobs this target runs at once; default `1` |
 | `context_window` | Context capacity reported in `result.tokens`; overrides the backend's value |
-| `retry` | `{ attempts, codes, patterns }`: retry a retryable failure on the same target |
+| `retry` | `{ attempts, codes, patterns }`: retry a matching failure on the same target. A policy without `codes` or `patterns` retries nothing. |
 | `env` | Environment variables for the worker process |
 
 **Important:** Put credentials in each CLI's own login or in `env`. Every target setting except `env` is copied into job records.

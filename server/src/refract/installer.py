@@ -33,7 +33,7 @@ else:
     import fcntl
 
 from refract.config import refract_home
-from refract.processes import kill_process_tree, prepare_command, process_group_kwargs
+from refract.runner.processes import kill_process_tree, prepare_command, process_group_kwargs
 
 DEFAULT_SOURCE = "https://github.com/sitien173/refract"
 MARKETPLACE_REPO = "sitien173/refract"

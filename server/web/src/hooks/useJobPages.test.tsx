@@ -165,7 +165,7 @@ it("deduplicates jobs that move from a later page into the refreshed first page"
     await hook.result.current.loadMore();
   });
   firstPage = page(["c", "a"], "c1");
-  await tick(1000);
+  await tick(30_000);
   await flush();
   await flush();
   expect(ids(hook.result.current.jobs)).toEqual(["c", "a", "d"]);
@@ -186,7 +186,7 @@ it("revalidates loaded pages when the live first page shifts so no job is lost o
     await hook.result.current.loadMore();
   });
   firstPage = page(["x", "a"], "c2");
-  await tick(1000);
+  await tick(30_000);
   await flush();
   expect(load).toHaveBeenCalledWith({ cursor: "c2" }, expect.any(AbortSignal));
   expect(ids(hook.result.current.jobs)).toEqual(["x", "a", "b", "c", "d"]);
@@ -208,7 +208,7 @@ it("refreshes a later-page job when the first-page cursor has not moved", async 
   });
   expect(stateOf(hook.result.current.jobs, "c")).toBe("running");
   second = [withState("c", "succeeded"), withState("d", "queued")];
-  await tick(1000);
+  await tick(30_000);
   expect(stateOf(hook.result.current.jobs, "c")).toBe("succeeded");
   expect(hook.result.current.nextCursor).toBeNull();
   hook.unmount();
@@ -228,7 +228,7 @@ it("drops a later-page job that no longer matches the state filter", async () =>
   });
   expect(ids(hook.result.current.jobs)).toEqual(["a", "c", "d"]);
   second = [withState("d", "running")];
-  await tick(1000);
+  await tick(30_000);
   expect(ids(hook.result.current.jobs)).toEqual(["a", "d"]);
   hook.unmount();
 });
@@ -251,7 +251,7 @@ it("keeps loaded pages on a revalidation failure, backs off, and recovers on a l
   });
   fail = true;
   second = [withState("c", "succeeded")];
-  await tick(1000);
+  await tick(30_000);
   expect(stateOf(hook.result.current.jobs, "c")).toBe("running");
   const failedCalls = load.mock.calls.filter(([f]) => f.cursor).length;
   await tick(1000);
@@ -285,7 +285,7 @@ it("discards revalidation response when filters change during revalidation", asy
   await flush();
   expect(ids(hook.result.current.jobs)).toEqual(["a1", "a2"]);
 
-  await tick(1000);
+  await tick(30_000);
   expect(load).toHaveBeenCalledTimes(2);
 
   hook.rerender({ filters: { state: "running" } });
@@ -321,7 +321,7 @@ it("disables load more while revalidation is in flight", async () => {
   expect(ids(hook.result.current.jobs)).toEqual(["a1", "a2"]);
   expect(hook.result.current.nextCursor).toBe("cur-1");
 
-  await tick(1000);
+  await tick(30_000);
   expect(load).toHaveBeenCalledTimes(2);
 
   await act(async () => {

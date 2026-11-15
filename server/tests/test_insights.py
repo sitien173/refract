@@ -4,28 +4,61 @@ import sqlite3
 
 import pytest
 
-import refract.database as database_module
-from refract.insights import get_stats
+from refract.api.http.insights import get_stats
+from refract.store.schema import DDL
 
 
-INSERT_METRICS = (
-    "INSERT INTO job_metrics(job_id, finished_at, workflow, target, backend, model, state, failure_kind, "
-    "duration_ms, tok_input, tok_output, tok_cache_read, tok_cache_write, attempts, skipped_targets, retry_of) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+_METRIC_COLUMNS = (
+    "job_id", "finished_at", "workflow", "target", "backend", "model", "state", "failure_kind", "duration_ms",
+    "tok_input", "tok_output", "tok_cache_read", "tok_cache_write", "attempts", "skipped_targets", "retry_of",
 )
+
+
+def _connect():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.executescript(DDL)
+    connection.execute("INSERT INTO projects(id, root, created_at) VALUES ('p', '/p', 'now')")
+    return connection
+
+
+def _add_job(connection, row, profile=""):
+    """Insert one terminal job and its attempt rows; totals sit on the last attempt, as the runtime reports them."""
+    r = dict(zip(_METRIC_COLUMNS, row))
+    connection.execute(
+        "INSERT INTO jobs(id, project_id, workflow, profile, session, from_job, state, failure_kind, plan_json,"
+        " created_at, finished_at, updated_at) VALUES (?, 'p', ?, ?, 's', ?, ?, ?, '{}', ?, ?, ?)",
+        (r["job_id"], r["workflow"], profile, r["retry_of"], r["state"], r["failure_kind"], r["finished_at"],
+         r["finished_at"], r["finished_at"]),
+    )
+    count = r["attempts"] if r["attempts"] is not None else 0
+    for seq in range(1, count + 1):
+        last = seq == count
+        reason = "fallback" if last and r["skipped_targets"] else "initial" if seq == 1 else "retry"
+        totals = last and (r["duration_ms"], r["tok_input"], r["tok_output"], r["tok_cache_read"], r["tok_cache_write"])
+        connection.execute(
+            "INSERT INTO attempts(job_id, seq, reason, target, backend, model, state, started_at, duration_ms,"
+            " tok_input, tok_output, tok_cache_read, tok_cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (r["job_id"], seq, reason, r["target"], r["backend"], r["model"],
+             r["state"] if last else "failed", r["finished_at"], *(totals or (None,) * 5)),
+        )
+
+
+def _add_jobs(connection, rows):
+    for row in rows:
+        _add_job(connection, row)
 
 
 @pytest.fixture
 def metrics_db():
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    connection.execute(database_module._METRICS_DDL[0])
+    connection = _connect()
     rows = [
         ("bad", "2026-01-01T23:30:00+00:00", "implement", "a", "claude", "priced", "failed", None, 3600000, 100, 20, 0, 0, 1, 0, ""),
         ("ok", "2026-01-02T00:30:00+00:00", "implement", "a", "codex", "priced", "succeeded", None, 1800000, 100, 10, 40, 5, 2, 1, "bad"),
         ("other", "2026-01-02T00:30:00+00:00", "review", "", "pi", "unpriced", "succeeded", None, 600000, 50, 5, 10, 0, None, None, ""),
     ]
-    connection.executemany(INSERT_METRICS, rows)
+    _add_jobs(connection, rows)
     yield SimpleNamespace(_connection=connection)
     connection.close()
 
@@ -35,11 +68,12 @@ def test_stats_aggregates_work_failover_tokens_and_normalizes_codex(metrics_db):
     work = result["work_delegated"]
     assert work["by_workflow"] == {"implement": {"failed": 1, "succeeded": 1}, "review": {"succeeded": 1}}
     assert work["by_state"] == {"failed": 1, "succeeded": 2}
-    assert work["worker_hours"] == pytest.approx(5 / 3)
+    assert work["worker_hours"] == pytest.approx(1.5)  # the job without attempt rows carries no duration
     assert work["success_rate"] == pytest.approx(2 / 3)
     assert result["failover_saves"] == {
-        "skipped_targets": 1, "retries": 1, "retries_after_failure": 1,
+        "skipped_targets": 1, "retries": 1,
         "unknown_skipped_targets": 1, "unknown_attempts": 1,
+        "attempts_by_reason": {"fallback": 1, "initial": 2},
     }
     codex = result["tokens"]["by_backend"]["codex"]
     assert (codex["uncached_input"], codex["cache_read"], codex["cache_hit_ratio"]) == (60, 40, .4)
@@ -49,8 +83,8 @@ def test_stats_aggregates_work_failover_tokens_and_normalizes_codex(metrics_db):
 
 
 def test_stats_normalizes_backend_input_with_cache_components(metrics_db):
-    metrics_db._connection.executemany(
-        INSERT_METRICS,
+    _add_jobs(
+        metrics_db._connection,
         [
             ("claude-cache", "2026-01-02T00:30:00+00:00", "review", "a", "claude",
              "unpriced", "succeeded", None, 0, 150, 0, 20, 30, 1, 0, ""),
@@ -66,7 +100,7 @@ def test_stats_normalizes_backend_input_with_cache_components(metrics_db):
     )
     by_backend = result["tokens"]["by_backend"]
     assert (by_backend["claude"]["input"], by_backend["claude"]["uncached_input"]) == (250, 200)
-    assert (by_backend["pi"]["input"], by_backend["pi"]["uncached_input"]) == (155, 130)
+    assert (by_backend["pi"]["input"], by_backend["pi"]["uncached_input"]) == (105, 90)  # the job without attempts adds none
     assert (by_backend["agy"]["input"], by_backend["agy"]["uncached_input"]) == (50, 50)
     assert (by_backend["codex"]["input"], by_backend["codex"]["uncached_input"]) == (100, 60)
 
@@ -83,14 +117,14 @@ def test_stats_timezone_offsets_produce_exact_daily_buckets(metrics_db):
 
 
 def test_retry_after_failed_job_outside_window_counts_as_failover_save(metrics_db):
-    metrics_db._connection.execute("DELETE FROM job_metrics")
-    metrics_db._connection.execute(
-        INSERT_METRICS,
+    metrics_db._connection.execute("DELETE FROM jobs")
+    _add_job(
+        metrics_db._connection,
         ("old-failure", "2025-12-30T00:00:00+00:00", "implement", "a", "codex",
          "priced", "failed", None, 0, 0, 0, 0, 0, 1, 0, ""),
     )
-    metrics_db._connection.execute(
-        INSERT_METRICS,
+    _add_job(
+        metrics_db._connection,
         ("recent-retry", "2026-01-02T00:00:00+00:00", "implement", "a", "codex",
          "priced", "succeeded", None, 0, 0, 0, 0, 0, 1, 0, "old-failure"),
     )
@@ -98,7 +132,8 @@ def test_retry_after_failed_job_outside_window_counts_as_failover_save(metrics_d
         metrics_db, 1,
         now=datetime(2026, 1, 2, 12, tzinfo=timezone.utc),
     )
-    assert result["failover_saves"]["retries_after_failure"] == 1
+    assert "retries_after_failure" not in result["failover_saves"]
+    assert result["failover_saves"]["attempts_by_reason"] == {"initial": 1}
 
 
 def test_stats_rejects_timezone_offset_outside_supported_range(metrics_db):
@@ -108,8 +143,8 @@ def test_stats_rejects_timezone_offset_outside_supported_range(metrics_db):
 
 def test_stats_window_includes_just_inside_and_excludes_just_outside(metrics_db):
     now = datetime(2026, 1, 10, 12, tzinfo=timezone.utc)
-    metrics_db._connection.executemany(
-        INSERT_METRICS,
+    _add_jobs(
+        metrics_db._connection,
         [
             ("inside", (now - timedelta(days=7) + timedelta(microseconds=1)).isoformat(),
              "workflow", "t", "codex", "model", "succeeded", None, 0, 0, 0, 0, 0, 1, 0, ""),
@@ -122,9 +157,9 @@ def test_stats_window_includes_just_inside_and_excludes_just_outside(metrics_db)
 
 
 def test_stats_zero_success_and_failure_count_has_zero_success_rate(metrics_db):
-    metrics_db._connection.execute("DELETE FROM job_metrics")
-    metrics_db._connection.executemany(
-        INSERT_METRICS,
+    metrics_db._connection.execute("DELETE FROM jobs")
+    _add_jobs(
+        metrics_db._connection,
         [(name, "2026-01-02T00:00:00+00:00", "workflow", "t", "codex", "model",
           state, None, 0, 0, 0, 0, 0, 1, 0, "")
          for name, state in (("cancelled", "cancelled"), ("interrupted", "interrupted"))],
@@ -138,9 +173,9 @@ def test_stats_zero_success_and_failure_count_has_zero_success_rate(metrics_db):
 
 
 def _insert_models(metrics_db, *models):
-    metrics_db._connection.execute("DELETE FROM job_metrics")
-    metrics_db._connection.executemany(
-        INSERT_METRICS,
+    metrics_db._connection.execute("DELETE FROM jobs")
+    _add_jobs(
+        metrics_db._connection,
         [(f"job-{index}", "2026-01-02T00:30:00+00:00", "workflow", "a", "codex", model,
           "succeeded", None, 0, 100, 10, 0, 0, 1, 0, "")
          for index, model in enumerate(models)],
@@ -156,16 +191,17 @@ def test_stats_merges_provider_prefixed_models_in_tokens(metrics_db):
 
 
 def test_stats_labels_empty_backend_and_model_as_unassigned(metrics_db):
-    metrics_db._connection.execute(
-        INSERT_METRICS,
+    _add_job(
+        metrics_db._connection,
         ("unassigned", "2026-01-02T00:30:00+00:00", "workflow", "", "", "",
          "succeeded", None, 0, 100, 0, 0, 0, 1, 0, ""),
     )
     result = get_stats(
         metrics_db, 7, now=datetime(2026, 1, 3, tzinfo=timezone.utc),
     )
-    assert result["tokens"]["by_backend"]["unassigned"]["jobs"] == 1
-    assert result["tokens"]["by_model"]["unassigned"]["jobs"] == 1
+    # the fixture job without attempt rows is unassigned too
+    assert result["tokens"]["by_backend"]["unassigned"]["jobs"] == 2
+    assert result["tokens"]["by_model"]["unassigned"]["jobs"] == 2
 
 
 @pytest.mark.parametrize("days", [2, 0, 366])
@@ -181,9 +217,7 @@ def test_stats_rejects_non_integer_timezone_offset(metrics_db):
 
 @pytest.fixture
 def breakdown_db():
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    connection.execute(database_module._METRICS_DDL[0])
+    connection = _connect()
     rows = [
         ("b1", "balanced", "review", "t2", "failed"),
         ("b2", "balanced", "implement", "t1", "succeeded"),
@@ -192,15 +226,11 @@ def breakdown_db():
         ("a1", "alpha", "review", "t1", "succeeded"),
         ("u1", "", "implement", "", "succeeded"),
     ]
-    connection.executemany(
-        "INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model, state) "
-        "VALUES (?, '2026-01-02T00:30:00+00:00', ?, ?, ?, 'claude', 'm', ?)",
-        rows,
-    )
-    connection.execute(
-        "INSERT INTO job_metrics(job_id, finished_at, profile, workflow, target, backend, model, state) "
-        "VALUES ('old', '2025-01-01T00:00:00+00:00', 'alpha', 'review', 't1', 'claude', 'm', 'succeeded')"
-    )
+    for job_id, profile, workflow, target, state in rows:
+        _add_job(connection, (job_id, "2026-01-02T00:30:00+00:00", workflow, target, "claude", "m", state,
+                              None, None, None, None, None, None, 1, 0, ""), profile)
+    _add_job(connection, ("old", "2025-01-01T00:00:00+00:00", "review", "t1", "claude", "m", "succeeded",
+                          None, None, None, None, None, None, 1, 0, ""), "alpha")
     yield SimpleNamespace(_connection=connection)
     connection.close()
 

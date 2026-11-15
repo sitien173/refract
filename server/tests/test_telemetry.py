@@ -1,6 +1,6 @@
 """Flat token counters: six nullable integers, null when unknown, never zero-filled."""
 
-from refract.telemetry import TokenCounters
+from refract.runner.tokens import TokenCounters
 
 KEYS = ("context_used", "context_window", "input", "output", "cache_read", "cache_write")
 

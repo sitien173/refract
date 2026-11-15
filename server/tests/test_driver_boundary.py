@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shutil
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,8 @@ from typing import Any
 import pytest
 
 from refract.config import TargetConfig
-from refract.drivers import DriverRegistry, DriverResult
+from refract.scheduling.cancel import CancelEvent
+from refract.runner.drivers import DriverRegistry, DriverResult
 from tests.cli_stub import stub_cli
 
 BACKENDS = ("claude", "codex", "pi", "agy")
@@ -127,7 +127,7 @@ async def _execute(
     pgids: list[int],
     events: list[dict[str, Any]],
 ) -> DriverResult:
-    cancel = threading.Event()
+    cancel = CancelEvent()
     loop = asyncio.get_running_loop()
 
     async def on_event(event: dict[str, Any]) -> None:

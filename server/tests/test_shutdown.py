@@ -15,9 +15,10 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from refract.dashboard import DashboardState, register_dashboard_routes
+from refract.api.http.common import DashboardState
+from refract.api.http.routes import register_dashboard_routes
 from refract.runtime import OrchestrationError, Runtime
-from refract.workers import run_sync
+from refract.store.pool import run_sync
 from tests.cli_stub import stub_cli
 from tests.orchestration_helpers import config as make_config, repository, register_project
 
@@ -93,7 +94,7 @@ async def test_retry_racing_shutdown_is_never_admitted_after_latch(tmp_path) -> 
         results = _race_create_job(runtime)
         admitted: list[str] = []
         try:
-            admitted.append((await runtime.retry(source.job_id, target="primary")).job_id)
+            admitted.append((await runtime.submit_from_job(source.job_id, target="primary")).job_id)
         except OrchestrationError as error:
             assert error.code == "daemon_stopping"
         for thread in runtime._race_threads:  # type: ignore[attr-defined]
@@ -114,7 +115,7 @@ async def test_concurrent_submit_retry_and_shutdown_never_interrupt_a_job(tmp_pa
             # The seed job is terminal, so the daemon is idle until a racer is admitted.
             outcomes = await asyncio.gather(
                 runtime.submit(project_id, "consult", "one"),
-                runtime.retry(source.job_id, target="primary"),
+                runtime.submit_from_job(source.job_id, target="primary"),
                 runtime.submit(project_id, "consult", "two"),
                 run_sync(runtime.shutdown_if_idle),
                 return_exceptions=True,
@@ -152,7 +153,7 @@ async def test_shutdown_if_idle_counts_queued_and_running_and_latches_when_idle(
         again = await runtime.submit(project_id, "consult", "still open")
         runtime.database.finish_job(queued.job_id, "failed", target="primary")
         runtime.database.finish_job(again.job_id, "failed", target="primary")
-        runtime.scheduler._pending.clear()
+        runtime.scheduler._queue.clear()
         runtime.scheduler._active.clear()
         assert runtime.shutdown_if_idle() == {"stopping": True, "running": 0, "queued": 0}
         with pytest.raises(OrchestrationError) as raised:
@@ -181,7 +182,7 @@ async def test_forced_shutdown_reports_real_counts_and_latches_admission(tmp_pat
 
 
 def _application(tmp_path, port: int = 9321):
-    from refract.server import create_application
+    from refract.api.mcp.app import create_application
 
     settings = make_config(tmp_path / "home")
     return create_application(settings, host="127.0.0.1", port=port), settings.home
@@ -189,7 +190,7 @@ def _application(tmp_path, port: int = 9321):
 
 @pytest.mark.asyncio
 async def test_daemon_json_is_private_complete_and_removed_on_exit(tmp_path, monkeypatch, caplog) -> None:
-    import refract.server as server_module
+    from refract.api.mcp import app as server_module
 
     application, home = _application(tmp_path)
     path = home / "daemon.json"
@@ -344,7 +345,8 @@ def test_shutdown_force_without_valid_token_is_unauthorized_even_with_bad_body(h
 def test_serve_idle_shutdown_request_sets_server_exit_flag(tmp_path, monkeypatch) -> None:
     import uvicorn
 
-    from refract import cli, server
+    from refract import cli
+    from refract.api.mcp import app as server
     from tests.test_server import _serve_config
 
     home = tmp_path / "refract"
@@ -382,7 +384,8 @@ def test_serve_idle_shutdown_request_sets_server_exit_flag(tmp_path, monkeypatch
 def _serve_with_stubbed_run(tmp_path, monkeypatch, fake_serve):
     import uvicorn
 
-    from refract import cli, server
+    from refract import cli
+    from refract.api.mcp import app as server
     from tests.test_server import _serve_config
 
     home = tmp_path / "refract"

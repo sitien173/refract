@@ -6,7 +6,7 @@ import { DailyChart, fillDays, fixed, getXLabels, InsightsView, niceTicks } from
 const empty: StatsResponse = {
   days: 7,
   work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
-  failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+  failover_saves: { skipped_targets: 0, retries: 0, attempts_by_reason: {}, unknown_skipped_targets: 0, unknown_attempts: 0 },
   tokens: { by_backend: {}, by_model: {}, by_target: {} },
 };
 
@@ -39,7 +39,7 @@ const full: StatsResponse = {
     success_rate: 0.5,
     daily: { "2026-11-09": { succeeded: 1, failed: 1 }, "2026-11-10": { succeeded: 3, failed: 0 } },
   },
-  failover_saves: { skipped_targets: 4, retries: 2, retries_after_failure: 1, unknown_skipped_targets: 1, unknown_attempts: 3 },
+  failover_saves: { skipped_targets: 4, retries: 2, attempts_by_reason: { initial: 9, retry: 2, fresh_session: 1, fallback: 4 }, unknown_skipped_targets: 1, unknown_attempts: 3 },
   tokens: {
     by_backend: { codex: gpt, claude, unassigned: none },
     by_model: { "gpt-x": gpt, "claude-y": claude, unassigned: none },
@@ -105,10 +105,13 @@ it("shows the work delegated cards, a named daily chart, and its table fallback"
 
 it("shows failover saves with a note for unknown counts", () => {
   renderView();
-  expect(kpi("Failover saves")).toHaveTextContent("7");
+  expect(kpi("Failover saves")).toHaveTextContent("6");
   expect(kpi("Jobs saved by skipping a target")).toHaveTextContent("4");
   expect(kpi("Jobs saved by a same-target retry")).toHaveTextContent("2");
-  expect(kpi("Jobs saved by retrying a failed job")).toHaveTextContent("1");
+  expect(kpi("Initial attempts")).toHaveTextContent("9");
+  expect(kpi("Retry attempts")).toHaveTextContent("2");
+  expect(kpi("Fresh session attempts")).toHaveTextContent("1");
+  expect(kpi("Fallback attempts")).toHaveTextContent("4");
   expect(screen.getByText("Unknown for 1 job (skipped targets) and 3 jobs (attempts).")).toBeInTheDocument();
 });
 
@@ -151,11 +154,13 @@ it("navigates back to the console", () => {
   expect(onNavigate).toHaveBeenCalledWith("/dashboard/");
 });
 
-it("counts a job that skipped several targets once and totals the three counters", () => {
-  renderView({ stats: { ...full, failover_saves: { skipped_targets: 1, retries: 0, retries_after_failure: 2, unknown_skipped_targets: 0, unknown_attempts: 0 } } });
+it("counts a job that skipped several targets once and totals the two counters", () => {
+  renderView({ stats: { ...full, failover_saves: { skipped_targets: 1, retries: 0, attempts_by_reason: { retry: 2 }, unknown_skipped_targets: 0, unknown_attempts: 0 } } });
   expect(kpi("Jobs saved by skipping a target")).toHaveTextContent(/^1$/);
   expect(kpi("Jobs saved by a same-target retry")).toHaveTextContent(/^0$/);
-  expect(kpi("Failover saves")).toHaveTextContent(/^3$/);
+  expect(kpi("Failover saves")).toHaveTextContent(/^1$/);
+  expect(kpi("Initial attempts")).toHaveTextContent(/^0$/);
+  expect(kpi("Retry attempts")).toHaveTextContent(/^2$/);
   expect(screen.queryByText("Targets skipped")).not.toBeInTheDocument();
 });
 

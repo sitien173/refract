@@ -20,12 +20,14 @@ def _ps_literal(token: str) -> str:
 def install_launcher(bin_dir: Path, name: str, script: Path, args: Sequence[str] = ()) -> Path:
     """Write a launcher that runs ``sys.executable script *args`` plus caller arguments.
 
+    The launcher sets ``FAKE_CLI_NAME`` so a fake can answer as the backend it stands for.
+
     Returns the path ``shutil.which(name, path=str(bin_dir))`` resolves to.
     """
     if sys.platform != "win32":
         launcher = bin_dir / name
         fixed = " ".join(shlex.quote(token) for token in (sys.executable, str(script), *args))
-        launcher.write_text(f'#!/bin/sh\nexec {fixed} "$@"\n', encoding="utf-8")
+        launcher.write_text(f'#!/bin/sh\nFAKE_CLI_NAME={shlex.quote(name)} exec {fixed} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
         return launcher
 
@@ -33,10 +35,10 @@ def install_launcher(bin_dir: Path, name: str, script: Path, args: Sequence[str]
         raise RuntimeError("PowerShell is required to install a Windows test launcher")
     fixed = " ".join(_ps_literal(token) for token in (sys.executable, str(script), *args))
     (bin_dir / f"{name}.ps1").write_text(
-        f"& {fixed} @args\nexit $LASTEXITCODE\n",
+        f"$env:FAKE_CLI_NAME = {_ps_literal(name)}\n& {fixed} @args\nexit $LASTEXITCODE\n",
         encoding="utf-8",
     )
     batch = " ".join(f'"{token}"' for token in (sys.executable, str(script), *args))
     launcher = bin_dir / f"{name}.cmd"
-    launcher.write_text(f"@{batch} %*\r\n", encoding="utf-8")
+    launcher.write_text(f'@set "FAKE_CLI_NAME={name}"\r\n@{batch} %*\r\n', encoding="utf-8")
     return launcher

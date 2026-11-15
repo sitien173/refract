@@ -12,7 +12,7 @@ The `coding_agent_cli` library builds each backend command line, runs the proces
 
 ## Target fields
 
-`id` and `backend` are required. Optional: `model`, `backend_profile`, `reasoning`, `system_prompt`, `args`, `max_concurrency`, `context_window`, `retry`, `env`. Credentials stay in each CLI's own store or in the target `env` table, never in `args`: target settings other than `env` are snapshotted into job records.
+`id` and `backend` are required. Optional: `model`, `backend_profile`, `reasoning`, `system_prompt`, `args`, `max_concurrency`, `context_window`, `retry` (a policy without `codes` or `patterns` retries nothing), `env`. Credentials stay in each CLI's own store or in the target `env` table, never in `args`: target settings other than `env` are snapshotted into job records.
 
 ## Profile fields
 

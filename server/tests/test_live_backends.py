@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 from refract.config import TargetConfig
-from refract.drivers import DriverRegistry, DriverResult
+from refract.scheduling.cancel import CancelEvent
+from refract.runner.drivers import DriverRegistry, DriverResult
 
 PROMPT = "Reply with exactly the word PONG and nothing else."
 
@@ -19,7 +20,7 @@ async def _live_execute(backend: str) -> DriverResult:
         cwd=Path.cwd(),
         session_id="",
         timeout_s=90,
-        cancel_event=threading.Event(),
+        cancel_event=CancelEvent(),
     )
 
 
@@ -105,7 +106,7 @@ async def test_live_ask_coordinator(backend: str, read_only: bool, tmp_path: Pat
             cwd=tmp_path,
             session_id="",
             timeout_s=90,
-            cancel_event=threading.Event(),
+            cancel_event=CancelEvent(),
             env=env,
         )
     finally:
@@ -169,7 +170,7 @@ async def test_live_telemetry_probe(backend: str, tmp_path: Path) -> None:
         cwd=tmp_path,
         session_id="",
         timeout_s=90,
-        cancel_event=threading.Event(),
+        cancel_event=CancelEvent(),
     )
     if out.outcome != "SUCCESS":
         if out.error_code in {"missing_cli", "bad_cwd"}:

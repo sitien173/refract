@@ -5,11 +5,14 @@ The config keys are optional: ``name`` (executable name for the record), ``recor
 (path to write argv, stdin, and cwd), ``pid_file`` (path to write this PID),
 ``raw_hex`` (stdout lines written verbatim from hex, before ``lines``), ``lines``
 (stdout lines to print), ``log_text`` (written to the path after ``--log-file``), ``last_message`` (written to the path after ``-o``),
-``sleep_s`` (seconds to sleep after printing), and ``exit_code``.
+``sleep_s`` (seconds to sleep after printing), ``stderr_lines`` (stderr lines to print),
+``ask_question`` (run ``refract ask`` with this question), ``ready_file`` (path to write
+when ready), ``block_forever`` (sleep until terminated), and ``exit_code``.
 """
 
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,6 +41,28 @@ for hex_line in config.get("raw_hex", []):
 for line in config.get("lines", []):
     sys.stdout.buffer.write(line.encode("utf-8") + b"\n")
     sys.stdout.buffer.flush()
+
+for err_line in config.get("stderr_lines", []):
+    sys.stderr.buffer.write(err_line.encode("utf-8") + b"\n")
+    sys.stderr.buffer.flush()
+
+if config.get("ready_file"):
+    Path(config["ready_file"]).write_text("ready\n", encoding="utf-8")
+
+if config.get("ask_question"):
+    answer = subprocess.run(
+        ["refract", "ask", str(config["ask_question"])],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    ).stdout.strip()
+    sys.stdout.buffer.write(answer.encode("utf-8") + b"\n")
+    sys.stdout.buffer.flush()
+
+if config.get("block_forever"):
+    while True:
+        time.sleep(0.2)
 
 if config.get("sleep_s"):
     time.sleep(config["sleep_s"])

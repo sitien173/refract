@@ -13,7 +13,7 @@ from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from refract.config import DEFAULT_ASK_TIMEOUT_S, DaemonConfig, load_config
+from refract.config import DEFAULT_ASK_TIMEOUT_S, ConfigurationLoadError, DaemonConfig, load_config
 from refract.logging_setup import configure as configure_logging, get_logger, resolve_config
 
 
@@ -25,11 +25,6 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     serve = commands.add_parser("serve", help="Run the local MCP daemon")
     serve.add_argument("--host", default=None)
-    serve.add_argument(
-        "--allow-remote",
-        action="store_true",
-        help="Allow binding a non-loopback host; the MCP endpoint has no authentication",
-    )
     serve.add_argument("--port", type=int, default=None)
     serve.add_argument(
         "--log-level",
@@ -110,12 +105,19 @@ def _ask(question: str) -> int:
     return 0
 
 
+def _report_config_error(exc: ValueError) -> None:
+    """Write the error text, then its ``config_invalid`` JSON as the last stderr line."""
+    sys.stderr.write(f"Configuration error: {exc}\n")
+    if isinstance(exc, ConfigurationLoadError):
+        sys.stderr.write(json.dumps({"error": exc.payload()}) + "\n")
+
+
 def _doctor(config: DaemonConfig | None = None) -> int:
     if config is None:
         try:
             config = load_config()
         except ValueError as exc:
-            sys.stderr.write(f"Configuration error: {exc}\n")
+            _report_config_error(exc)
             return 1
     configure_logging(config.logging)
     logging_config = resolve_config(config.logging)
@@ -294,7 +296,7 @@ def _stats(args: argparse.Namespace) -> int:
                 f"Work delegated ({args.days} days): {sum(work['by_state'].values())} jobs; "
                 f"{work['worker_hours']:.2f} worker hours; "
                 f"{work['success_rate']:.1%} success rate\n",
-                f"Failover saves: {sum(saves[key] for key in ('skipped_targets', 'retries', 'retries_after_failure'))}\n",
+                f"Failover saves: {sum(saves[key] for key in ('skipped_targets', 'retries'))}\n",
                 f"Tokens by model: {len(tokens)} models\n",
             )
         except (KeyError, TypeError, AttributeError, ValueError):
@@ -330,6 +332,15 @@ def _logging_overrides(args: argparse.Namespace) -> dict[str, str]:
     return {name: str(value) for name, value in overrides.items() if value is not None}
 
 
+def _refuse_non_loopback(host: str | None) -> None:
+    if host is not None and not _is_loopback_bind(host):
+        sys.stderr.write(
+            f"Refusing to bind host {host!r}: loopback is the only supported bind address "
+            "(127.0.0.1, ::1, or localhost).\n"
+        )
+        raise SystemExit(2)
+
+
 def _is_loopback_bind(host: str) -> bool:
     if host.lower() == "localhost":
         return True
@@ -362,23 +373,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(2)
 
     logging_overrides = _logging_overrides(args)
+    _refuse_non_loopback(getattr(args, "host", None))
     try:
         config = load_config()
     except ValueError as exc:
-        sys.stderr.write(f"Configuration error: {exc}\n")
+        _report_config_error(exc)
         raise SystemExit(1) from exc
     # Resolve transport settings locally; MCPServer has no mutable transport config.
     host = args.host if getattr(args, "host", None) is not None else config.host
     port = args.port if getattr(args, "port", None) is not None else config.port
-    if not _is_loopback_bind(host) and not getattr(args, "allow_remote", False):
-        sys.stderr.write(
-            f"Refusing to bind non-loopback host {host!r}: the MCP endpoint has no authentication. "
-            "Pass --allow-remote to bind it anyway.\n"
-        )
-        raise SystemExit(2)
+    _refuse_non_loopback(host)
 
     # Import after configuration so startup uses the final settings.
-    from refract import server
+    from refract.api.mcp.app import create_application
 
     log.info(
         "Launching HTTP transport",
@@ -387,7 +394,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         import uvicorn
 
-        application = server.create_application(config, host=host, port=port, logging_overrides=logging_overrides)
+        application = create_application(config, host=host, port=port, logging_overrides=logging_overrides)
         daemon = uvicorn.Server(uvicorn.Config(application, host=host, port=port, timeout_graceful_shutdown=5))
         # The shutdown endpoint asks this server to exit once the runtime is idle.
         application.state.refract_dashboard.request_exit = lambda: setattr(daemon, "should_exit", True)

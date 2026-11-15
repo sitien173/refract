@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from refract.database import CardError, Database
+from refract.store.cards import CardError
+from refract.store.database import Database
 
 STATES = ("todo", "in_progress", "in_review", "done", "cancelled")
 EDGES = {
@@ -41,7 +42,7 @@ def _job(database: Database, project_id: str) -> str:
     job_id = str(uuid.uuid4())
     database.create_job(
         job_id=job_id, project_id=project_id, workflow="implement", profile="default",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
     return job_id
 
@@ -191,7 +192,7 @@ def test_links_survive_pruning_and_report_unavailable(database: Database, projec
     database.finish_job(job_id, "succeeded", text="x", target="primary")
     _card(database, project_id, job_ids=[job_id])
 
-    database.prune_history("9999-01-01T00:00:00Z")
+    database.prune_retention(content_before="9999-01-01T00:00:00Z", rows_before="9999-01-01T00:00:00Z")
 
     (job,) = database.card_detail("c1")["jobs"]
     assert job["job_id"] == job_id
@@ -280,7 +281,7 @@ def test_unknown_project_is_rejected(database: Database) -> None:
 def _named_job(database: Database, project_id: str, job_id: str) -> str:
     database.create_job(
         job_id=job_id, project_id=project_id, workflow="implement", profile="default",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
     return job_id
 
@@ -289,7 +290,7 @@ def test_card_rows_carry_job_ids_in_link_order(database: Database, project_id: s
     # Link order is chronological with a job_id tie-break. Windows clocks tick about every 15 ms,
     # so two calls can share a timestamp; a strictly increasing clock keeps the calls distinct.
     ticks = itertools.count(1)
-    monkeypatch.setattr("refract.database.utc_now", lambda: f"2030-01-01T00:00:{next(ticks):02d}+00:00")
+    monkeypatch.setattr("refract.store.cards.utc_now", lambda: f"2030-01-01T00:00:{next(ticks):02d}+00:00")
     late, early_b, early_a = (_named_job(database, project_id, name) for name in ("job-z", "job-b", "job-a"))
     created = _card(database, project_id, "c1", job_ids=[late])
     assert created["job_ids"] == ["job-z"]

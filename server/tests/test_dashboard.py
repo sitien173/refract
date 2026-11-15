@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import pytest
 from starlette.applications import Starlette
 
-from refract.dashboard import DashboardState, register_dashboard_routes
+from refract.api.http.common import DashboardState
+from refract.api.http.routes import register_dashboard_routes
 
 
 async def request(app, path, *, method="GET", headers=(), body=b"", client_host="127.0.0.1"):
@@ -106,11 +107,23 @@ async def test_ask_malformed_body_and_empty_question() -> None:
         assert status == 400
 
 
-@pytest.mark.asyncio
-async def test_ask_token_auth_and_wrong_job() -> None:
-    from refract.ask import AskRegistry
+def _registry(tmp_path, job_id: str):
+    """A DB-backed AskRegistry; questions need a job row."""
+    from refract.scheduling.asks import AskRegistry
+    from refract.store.database import Database
+    from refract.scheduling.hub import Hub
 
-    registry = AskRegistry()
+    db = Database(tmp_path / "refract.db")
+    db.upsert_project(project_id="proj", root=str(tmp_path))
+    db.create_job(job_id=job_id, project_id="proj", session="main", workflow="implement",
+                  profile="balanced", prompt="work", plan_json="{}", fresh=True)
+    db.start_job(job_id)
+    return AskRegistry(db, Hub())
+
+
+@pytest.mark.asyncio
+async def test_ask_token_auth_and_wrong_job(tmp_path) -> None:
+    registry = _registry(tmp_path, "job-1")
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=SimpleNamespace(
         ask_registry=registry, config=SimpleNamespace(ask_timeout_s=17)
     ))))
@@ -128,11 +141,9 @@ async def test_ask_token_auth_and_wrong_job() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_answered_and_conflict() -> None:
+async def test_ask_answered_and_conflict(tmp_path) -> None:
     import asyncio
-    from refract.ask import AskRegistry
-
-    registry = AskRegistry()
+    registry = _registry(tmp_path, "job-ask")
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=SimpleNamespace(
         ask_registry=registry, config=SimpleNamespace(ask_timeout_s=2)
     ))))
@@ -151,11 +162,9 @@ async def test_ask_answered_and_conflict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_second_pending_returns_409() -> None:
+async def test_ask_second_pending_returns_409(tmp_path) -> None:
     import asyncio
-    from refract.ask import AskRegistry
-
-    registry = AskRegistry()
+    registry = _registry(tmp_path, "job-conflict")
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=SimpleNamespace(
         ask_registry=registry, config=SimpleNamespace(ask_timeout_s=2)
     ))))
@@ -195,7 +204,7 @@ def test_routes_are_dashboard_routes_ask_and_actions():
         "/dashboard/assets/{path:path}",
         "/ask",
         "/dashboard/api/jobs/{job_id}/cancel",
-        "/dashboard/api/jobs/{job_id}/retry",
+        "/dashboard/api/events",
         "/dashboard/api/jobs/{job_id}/answer",
         "/dashboard/api/shutdown",
         "/dashboard/api/jobs",
@@ -215,7 +224,7 @@ async def test_dashboard_routes_serve_spa_shell_for_deep_links(tmp_path, monkeyp
     static = tmp_path / "app"
     static.mkdir()
     (static / "index.html").write_text("<main>SPA shell</main>", encoding="utf-8")
-    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    monkeypatch.setattr("refract.api.http.routes._APP_STATIC_DIR", static, raising=False)
     app = Starlette(routes=register_dashboard_routes(DashboardState()))
     for path in ("/dashboard", "/dashboard/", "/dashboard/jobs/job-1", "/dashboard/targets"):
         status, body = await request(app, path)
@@ -228,7 +237,7 @@ async def test_dashboard_assets_are_not_shell_fallback(tmp_path, monkeypatch):
     static = tmp_path / "app"
     (static / "assets").mkdir(parents=True)
     (static / "index.html").write_text("<main>SPA shell</main>", encoding="utf-8")
-    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    monkeypatch.setattr("refract.api.http.routes._APP_STATIC_DIR", static, raising=False)
     app = Starlette(routes=register_dashboard_routes(DashboardState()))
     status, _ = await request(app, "/dashboard/assets/missing.js")
     assert status == 404

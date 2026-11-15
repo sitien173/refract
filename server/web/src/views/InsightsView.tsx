@@ -374,12 +374,19 @@ function WorkDelegated({ work, windowDays }: { work: StatsResponse["work_delegat
   );
 }
 
+const ATTEMPT_REASONS = [
+  ["initial", "Initial"],
+  ["retry", "Retry"],
+  ["fresh_session", "Fresh session"],
+  ["fallback", "Fallback"],
+] as const;
+
 function FailoverSaves({ saves }: { saves: StatsResponse["failover_saves"] }) {
   const unknown = [
     saves.unknown_skipped_targets > 0 && `${saves.unknown_skipped_targets} ${saves.unknown_skipped_targets === 1 ? "job" : "jobs"} (skipped targets)`,
     saves.unknown_attempts > 0 && `${saves.unknown_attempts} ${saves.unknown_attempts === 1 ? "job" : "jobs"} (attempts)`,
   ].filter(Boolean);
-  const total = saves.skipped_targets + saves.retries + saves.retries_after_failure;
+  const total = saves.skipped_targets + saves.retries;
   return (
     <section aria-label="Failover saves" className="flex flex-col gap-3">
       <h2 className="text-xl font-semibold tracking-tight">Failover saves</h2>
@@ -387,7 +394,11 @@ function FailoverSaves({ saves }: { saves: StatsResponse["failover_saves"] }) {
         <Kpi label="Failover saves" value={count(total)} />
         <Kpi label="Jobs saved by skipping a target" value={count(saves.skipped_targets)} />
         <Kpi label="Jobs saved by a same-target retry" value={count(saves.retries)} />
-        <Kpi label="Jobs saved by retrying a failed job" value={count(saves.retries_after_failure)} />
+      </KpiGrid>
+      <KpiGrid label="Attempts by reason">
+        {ATTEMPT_REASONS.map(([reason, label]) => (
+          <Kpi key={reason} label={`${label} attempts`} value={count(saves.attempts_by_reason[reason] ?? 0)} />
+        ))}
       </KpiGrid>
       {unknown.length > 0 && <p className="text-sm text-muted-foreground">Unknown for {unknown.join(" and ")}.</p>}
     </section>

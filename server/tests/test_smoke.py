@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from refract import cli as _cli  # noqa: F401  # bind the real urlopen before conftest stubs it
+from refract.scheduling.cancel import CancelEvent
 from tests.claude_cli import stub_claude
 
 
@@ -27,7 +28,7 @@ def test_refract_version_is_1_and_lock_matches_without_dependency_changes() -> N
 
 
 def test_imports() -> None:
-    import refract.server  # noqa: F401
+    import refract.api.mcp.app  # noqa: F401
     import refract.cli  # noqa: F401
 
 
@@ -43,7 +44,9 @@ def test_doctor_checks_prerequisites_and_accepts_partial_profiles(
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -76,7 +79,9 @@ def test_status_probes_configured_daemon(monkeypatch, tmp_path, capsys, http_sta
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 port = 9911
 
@@ -141,7 +146,7 @@ def test_status_reports_pid_only_for_matching_running_daemon(
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\nport = 9911\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\nport = 9911\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
         '[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
     )
     if daemon_payload is not None:
@@ -170,7 +175,7 @@ def test_status_pid_lookup_failure_does_not_change_running_result(monkeypatch, t
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n'
         '[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -222,7 +227,7 @@ def test_stop_cli_cases(monkeypatch, tmp_path, capsys, case, force, exit_code, m
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
         'backend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -317,7 +322,7 @@ def test_restart_cli_cases(
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\n'
         'backend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n', encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -385,12 +390,12 @@ def test_stats_calls_api_and_prints_requested_output(monkeypatch, tmp_path, caps
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
     payload = {"days": 7, "work_delegated": {"by_state": {"succeeded": 1},
-        "worker_hours": 1.0, "success_rate": 1.0}, "failover_saves": {"skipped_targets": 1, "retries": 0, "retries_after_failure": 0,
+        "worker_hours": 1.0, "success_rate": 1.0}, "failover_saves": {"skipped_targets": 1, "retries": 0,
             "unknown_skipped_targets": 0, "unknown_attempts": 0},
         "tokens": {"by_model": {"model": {}}}}
     raw_body = b'{ "days": 7 }\n'
@@ -430,7 +435,7 @@ def test_stats_http_error_reports_status_and_api_error(monkeypatch, tmp_path, ca
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -457,7 +462,7 @@ def test_stats_malformed_response_exits_nonzero_without_traceback(monkeypatch, t
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -492,7 +497,7 @@ def test_stats_unexpected_payload_shape_exits_nonzero_without_traceback(monkeypa
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -519,7 +524,7 @@ def test_stats_without_daemon_exits_nonzero(monkeypatch, tmp_path, capsys) -> No
     home = tmp_path / "refract"
     home.mkdir()
     (home / "config.toml").write_text(
-        '[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
+        'schema_version = 1\n\n[daemon]\ndefault_profile = "balanced"\n\n[[targets]]\nid = "primary"\nbackend = "codex"\n\n[profiles.balanced]\nimplement = "primary"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("REFRACT_HOME", str(home))
@@ -549,7 +554,7 @@ def test_serve_reports_invalid_configuration(monkeypatch, tmp_path, capsys) -> N
 
     home = tmp_path / "refract"
     home.mkdir()
-    (home / "config.toml").write_text("[daemon]\ndefault_profile = 'balanced'\n", encoding="utf-8")
+    (home / "config.toml").write_text("schema_version = 1\n\n[daemon]\ndefault_profile = 'balanced'\n", encoding="utf-8")
     monkeypatch.setenv("REFRACT_HOME", str(home))
 
     with pytest.raises(SystemExit) as raised:
@@ -603,11 +608,11 @@ def _process_gone(pid: int) -> bool:
 @pytest.mark.asyncio
 async def test_driver_threading_cancel_reaches_worker_child(tmp_path, monkeypatch) -> None:
     from refract.config import TargetConfig
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
 
     pid_file = tmp_path / "pid"
     stub_claude(monkeypatch, tmp_path, ["started"], sleep_s=30, pid_file=pid_file)
-    cancel_event = threading.Event()
+    cancel_event = CancelEvent()
 
     def cancel_once_started() -> None:
         while not pid_file.exists():
@@ -634,7 +639,7 @@ async def test_driver_threading_cancel_reaches_worker_child(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path) -> None:
-    import refract.drivers as drivers_module
+    import refract.runner.drivers as drivers_module
     from refract.config import TargetConfig
 
     result = await drivers_module.DriverRegistry().execute(
@@ -643,7 +648,7 @@ async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path)
         cwd=tmp_path,
         session_id="",
         timeout_s=0,
-        cancel_event=threading.Event(),
+        cancel_event=CancelEvent(),
     )
 
     assert result.outcome == "TARGET_FATAL"
@@ -666,7 +671,7 @@ async def test_driver_rejects_unrecognized_backend_without_fallthrough(tmp_path)
 )
 async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target) -> None:
     from refract.config import TargetConfig
-    from refract.drivers import DriverRegistry
+    from refract.runner.drivers import DriverRegistry
 
     result = await DriverRegistry().execute(
         target=TargetConfig(**target),
@@ -674,7 +679,7 @@ async def test_driver_rejects_programmatic_reserved_target_args(tmp_path, target
         cwd=tmp_path,
         session_id="",
         timeout_s=0,
-        cancel_event=threading.Event(),
+        cancel_event=CancelEvent(),
     )
 
     assert result.outcome == "TARGET_FATAL"
@@ -787,7 +792,7 @@ def test_ask_successful_answer(monkeypatch, capsys) -> None:
 def test_ask_timeout_prints_exact_no_answer_text(monkeypatch, capsys) -> None:
     import http.server
 
-    from refract.ask import NO_ANSWER_TEXT
+    from refract.scheduling.asks import NO_ANSWER_TEXT
     from refract.cli import main
 
     class TimeoutHandler(http.server.BaseHTTPRequestHandler):

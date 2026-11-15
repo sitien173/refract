@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   getCard: vi.fn(),
   getStats: vi.fn(),
   postJobAction: vi.fn(),
+  submitFromJob: vi.fn(),
 }));
 vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), ...api }));
 
@@ -31,7 +32,7 @@ const detailOf = (id: string, state = "failed", pending_question: unknown = null
 const emptyStats = {
   days: 7,
   work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
-  failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+  failover_saves: { skipped_targets: 0, retries: 0, attempts_by_reason: {}, unknown_skipped_targets: 0, unknown_attempts: 0 },
   tokens: { by_backend: {}, by_model: {}, by_target: {} },
 };
 const announcements = () => screen.getByRole("status", { name: "Announcements" });
@@ -50,6 +51,7 @@ beforeEach(() => {
   api.getCard.mockResolvedValue({ card: {}, moves: [], jobs: [] });
   api.getStats.mockResolvedValue(emptyStats);
   api.postJobAction.mockResolvedValue({ job_id: "new-job", state: "queued" });
+  api.submitFromJob.mockResolvedValue({ job_id: "new-job", state: "queued", from_job: "old" });
 });
 
 afterEach(() => {
@@ -253,7 +255,7 @@ it("restores deep-link filters, selects the retry job, and keeps the retry annou
   await settle();
   expect(location.pathname).toBe("/dashboard/jobs/new-job");
   expect(location.search).toBe("?state=running&q=needle");
-  expect(api.postJobAction).toHaveBeenCalledWith("old", "retry", {});
+  expect(api.submitFromJob).toHaveBeenCalledWith("old");
   expect(screen.getByRole("heading", { name: "Job new-job" })).toBeInTheDocument();
   expect(announcements()).toHaveTextContent("Retry started");
 });
@@ -275,16 +277,16 @@ it("clears the previous announcement when the user selects another job", async (
 it("stops polling the detail of a terminal job but keeps polling the list", async () => {
   renderApp();
   await settle();
-  await settle(5000);
+  await settle(60_000);
   expect(api.getJob).toHaveBeenCalledTimes(1);
-  expect(api.getJobs.mock.calls.length).toBeGreaterThanOrEqual(5);
+  expect(api.getJobs.mock.calls.length).toBeGreaterThanOrEqual(3);
 });
 
 it("keeps polling the detail of a running job", async () => {
   api.getJob.mockImplementation((id: string) => Promise.resolve(detailOf(id, "running")));
   renderApp();
   await settle();
-  await settle(3000);
+  await settle(60_000);
   expect(api.getJob.mock.calls.length).toBeGreaterThanOrEqual(3);
 });
 
@@ -295,7 +297,7 @@ it("keeps the last good detail and an open answer draft when a later refresh fai
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Answer question" }));
   fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Keep this" } });
-  await settle(1000);
+  await settle(30_000);
   expect(api.getJob.mock.calls.length).toBeGreaterThanOrEqual(2);
   // The open modal dialog hides the page from the accessibility tree, so query by text.
   expect(screen.getByText("Job old")).toBeInTheDocument();
@@ -339,8 +341,8 @@ it("announces list warning only when error becomes non-null and does not overwri
 
   expect(announcements()).toHaveTextContent("");
 
-  // First failed poll at 1s
-  await settle(1000);
+  // First failed poll at 30s
+  await settle(30_000);
   expect(announcements()).toHaveTextContent("list offline");
 
   // User action announces something
@@ -465,4 +467,29 @@ it("clears card selection and announces Card not found on 404", async () => {
   expect(location.search).toBe("?project=p1");
   expect(announcements()).toHaveTextContent("Card not found");
   expect(screen.queryByRole("dialog", { name: "Card detail" })).not.toBeInTheDocument();
+});
+
+it("refetches the open job when the server signals a change", async () => {
+  const sources: { onmessage: ((event: { data: string }) => void) | null }[] = [];
+  vi.stubGlobal(
+    "EventSource",
+    class {
+      onopen = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror = null;
+      readyState = 1;
+      constructor(public url: string) {
+        sources.push(this);
+      }
+      close() {}
+    },
+  );
+  api.getJob.mockImplementation((id: string) => Promise.resolve(detailOf(id, "running")));
+  renderApp();
+  await settle();
+  expect(sources).toHaveLength(1);
+  const before = api.getJob.mock.calls.length;
+  await act(async () => sources[0].onmessage?.({ data: JSON.stringify({ job_id: "old", kind: "terminal" }) }));
+  await settle();
+  expect(api.getJob.mock.calls.length).toBeGreaterThan(before);
 });

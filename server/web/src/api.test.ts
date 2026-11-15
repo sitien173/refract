@@ -11,6 +11,7 @@ import {
   getTargets,
   postJobAction,
   StatsResponseSchema,
+  submitFromJob,
 } from "./api";
 
 function response(status: number, body: unknown, json = vi.fn().mockResolvedValue(body)) {
@@ -26,7 +27,7 @@ const sampleJobSummary = {
   profile: null,
   target: null,
   session: null,
-  retry_of: null,
+  from_job: "",
   failure_kind: null,
   created_at: "2026-11-07T00:00:00Z",
   updated_at: "2026-11-07T00:00:00Z",
@@ -69,6 +70,24 @@ describe("dashboard API", () => {
       body: JSON.stringify({ question_id: "q1", answer: "yes" }),
       cache: "no-store",
     });
+  });
+
+  it("posts a copy of a job to the jobs route with CSRF headers", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(200, { job_id: "j2", state: "queued", from_job: "j1" }));
+    await expect(submitFromJob("j1", {}, fetcher as typeof fetch)).resolves.toEqual({ job_id: "j2", state: "queued", from_job: "j1" });
+    expect(fetcher.mock.calls[0][0]).toBe("/dashboard/api/jobs");
+    expect(fetcher.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      headers: { "X-Refract-Dashboard": "1", "Content-Type": "application/json" },
+      body: JSON.stringify({ from_job: "j1" }),
+    });
+    await submitFromJob("j1", { target: "pi", fresh: true }, fetcher as typeof fetch);
+    expect(fetcher.mock.calls[1][1]).toMatchObject({ body: JSON.stringify({ from_job: "j1", target: "pi", fresh: true }) });
+  });
+
+  it("surfaces the error code of a rejected copy", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(409, { error: "Job is not finished", code: "invalid_state" }));
+    await expect(submitFromJob("j1", {}, fetcher as typeof fetch)).rejects.toMatchObject({ status: 409, code: "invalid_state" });
   });
 
   it("preserves status and error code for JSON errors including 409", async () => {
@@ -295,7 +314,7 @@ const sampleStats = {
   failover_saves: {
     skipped_targets: 1,
     retries: 1,
-    retries_after_failure: 1,
+    attempts_by_reason: { initial: 4, retry: 1, fresh_session: 1, fallback: 1 },
     unknown_skipped_targets: 1,
     unknown_attempts: 1,
   },
@@ -421,7 +440,7 @@ describe("stats API", () => {
     const empty = {
       days: 1,
       work_delegated: { by_workflow: {}, by_state: {}, breakdown: [], worker_hours: 0, success_rate: 0, daily: {} },
-      failover_saves: { skipped_targets: 0, retries: 0, retries_after_failure: 0, unknown_skipped_targets: 0, unknown_attempts: 0 },
+      failover_saves: { skipped_targets: 0, retries: 0, attempts_by_reason: {}, unknown_skipped_targets: 0, unknown_attempts: 0 },
       tokens: { by_backend: {}, by_model: {}, by_target: {} },
     };
     expect(StatsResponseSchema.safeParse(empty).success).toBe(true);

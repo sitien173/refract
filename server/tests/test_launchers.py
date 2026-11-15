@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from refract.processes import prepare_command
+from refract.runner.processes import prepare_command
 from tests.launchers import install_launcher
 
 SCRIPT = """\

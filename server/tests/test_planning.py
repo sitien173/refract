@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from refract.config import load_config
-from refract.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
+from refract.runner.planning import execution_plan_data, parse_execution_plan, resolve_execution_plan
 from refract.workflows import get_workflow
 from tests.orchestration_helpers import config
 
@@ -21,7 +21,7 @@ def test_plan_snapshots_one_workflow_selection(tmp_path) -> None:
 
 def test_plan_context_window_persists_without_affecting_identity(tmp_path) -> None:
     from dataclasses import replace
-    from refract.planning import target_execution_key
+    from refract.runner.planning import target_execution_key
     catalog = config(tmp_path / "home")
     original = catalog.targets[0]
     configured = replace(original, context_window=200000)
@@ -129,7 +129,9 @@ def test_plan_rejects_duplicate_target_identifiers(tmp_path) -> None:
 def test_partial_profile_rejects_only_unmapped_workflow_at_plan_resolution(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "consult-only"
 
 [[targets]]
@@ -154,7 +156,7 @@ consult = "primary"
 
 def test_custom_target_args_round_trip_in_plan() -> None:
     from refract.config import TargetConfig, TargetSelection
-    from refract.planning import ExecutionPlan
+    from refract.runner.planning import ExecutionPlan
 
     target = TargetConfig(
         id="native-with-custom-args",
@@ -181,7 +183,7 @@ def test_custom_target_args_round_trip_in_plan() -> None:
 )
 def test_pi_native_args_round_trip_in_plan(native_args: tuple[str, ...]) -> None:
     from refract.config import TargetConfig, TargetSelection
-    from refract.planning import ExecutionPlan
+    from refract.runner.planning import ExecutionPlan
 
     target = TargetConfig(
         id="pi-with-native-args",
@@ -202,13 +204,15 @@ def test_plan_snapshots_retry_policy_and_survives_config_edits(tmp_path) -> None
     from refract.config import RetryPolicy
     path = tmp_path / "config.toml"
     path.write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
 id = "primary"
 backend = "codex"
-retry = { attempts = 2, codes = ["rate_limit"], patterns = ["temporarily unavailable"] }
+retry = { attempts = 2, codes = ["service_error"], patterns = ["temporarily unavailable"] }
 
 [profiles.balanced]
 implement = "primary"
@@ -220,13 +224,13 @@ consult = "primary"
     catalog = load_config(path)
     plan = resolve_execution_plan(get_workflow("implement"), catalog, "balanced")
     policy = plan.target("primary").retry
-    assert policy == RetryPolicy(2, ("rate_limit",), ("temporarily unavailable",))
+    assert policy == RetryPolicy(2, ("service_error",), ("temporarily unavailable",))
 
     # Round trip serialization
     data = execution_plan_data(plan)
     assert data["targets"][0]["retry"] == {
         "attempts": 2,
-        "codes": ["rate_limit"],
+        "codes": ["service_error"],
         "patterns": ["temporarily unavailable"],
     }
     restored = parse_execution_plan(data)
@@ -270,13 +274,15 @@ def test_plan_without_retry_defaults_to_no_retry(tmp_path) -> None:
 def test_plan_rejects_malformed_persisted_retry_data(tmp_path, mutate) -> None:
     path = tmp_path / "config.toml"
     path.write_text(
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
 id = "primary"
 backend = "codex"
-retry = { attempts = 2, codes = ["rate_limit"] }
+retry = { attempts = 2, codes = ["service_error"] }
 
 [profiles.balanced]
 implement = "primary"

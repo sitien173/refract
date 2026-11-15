@@ -19,7 +19,9 @@ consult = "primary"
 
 
 def _base_config_toml() -> str:
-    return """[daemon]
+    return """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -29,7 +31,9 @@ backend = "codex"
 
 
 def _target_toml(env_line: str) -> str:
-    return f"""[daemon]
+    return f"""schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -141,7 +145,9 @@ def test_no_shared_mutable_defaults() -> None:
 def test_project_target_overlay_precedence_and_replacement(tmp_path) -> None:
     base, load = _overlay(
         tmp_path,
-        """[daemon]
+        """schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -281,3 +287,17 @@ def test_resolve_target_environment_never_mutates_os_environ() -> None:
     assert resolved == {"TEST_RESOLVER_NEW_KEY": "val"}
     assert "PATH" not in resolved
     assert dict(os.environ) == snapshot_items
+
+
+def test_empty_environment_value_is_accepted(tmp_path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_target_toml('env = { EMPTY = "" }'), encoding="utf-8")
+    assert load_config(path).targets[0].env == {"EMPTY": ""}
+
+
+def test_names_resembling_protected_prefix_are_accepted(tmp_path) -> None:
+    names = ["REFRACT_ASK", "REFRACT_ASKED", "refract_ask_token", "XREFRACT_ASK_TOKEN", "REFRACT_ASK"]
+    env = ", ".join(f'{name} = "v"' for name in dict.fromkeys(names))
+    path = tmp_path / "config.toml"
+    path.write_text(_target_toml(f"env = {{ {env} }}"), encoding="utf-8")
+    assert set(load_config(path).targets[0].env) == set(names)

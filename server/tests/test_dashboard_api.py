@@ -9,14 +9,11 @@ from typing import Any
 import pytest
 from starlette.applications import Starlette
 
-from refract.dashboard import (
-    DASHBOARD_HEADER,
-    DASHBOARD_HEADER_VALUE,
-    DashboardState,
-    register_dashboard_routes,
-)
+from refract.api.http.common import DASHBOARD_HEADER, DASHBOARD_HEADER_VALUE, DashboardState
+from refract.api.http.routes import register_dashboard_routes
 from refract.models import ActionResult, SubmissionResult
 from refract.runtime import OrchestrationError
+from refract.store.schema import DDL
 
 
 async def api_request(
@@ -101,7 +98,7 @@ async def test_dashboard_spa_shell_fallback_assets_and_traversal(tmp_path, monke
     assets = static / "assets"
     assets.mkdir()
     (assets / "index-AbCd.js").write_bytes(b"export {}")
-    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    monkeypatch.setattr("refract.api.http.routes._APP_STATIC_DIR", static, raising=False)
     app = Starlette(routes=register_dashboard_routes(DashboardState()))
 
     for path in ("/dashboard", "/dashboard/", "/dashboard/jobs/x", "/dashboard/targets"):
@@ -140,7 +137,7 @@ async def test_dashboard_spa_shell_fallback_assets_and_traversal(tmp_path, monke
 async def test_nul_in_dashboard_asset_path_returns_404(tmp_path, monkeypatch) -> None:
     static = tmp_path / "app"
     (static / "assets").mkdir(parents=True)
-    monkeypatch.setattr("refract.dashboard._APP_STATIC_DIR", static, raising=False)
+    monkeypatch.setattr("refract.api.http.routes._APP_STATIC_DIR", static, raising=False)
     app = Starlette(routes=register_dashboard_routes(DashboardState()))
 
     status, _, _ = await api_request(app, "/dashboard/assets/a%00b", method="GET")
@@ -160,7 +157,6 @@ async def test_unknown_dashboard_api_path_is_json_404_not_spa_shell() -> None:
 class FakeRuntime:
     def __init__(self) -> None:
         self.cancel_calls: list[str] = []
-        self.retry_calls: list[str] = []
         self.answer_calls: list[tuple[str, str, str | None]] = []
         self.jobs: dict[str, dict[str, Any]] = {}
 
@@ -171,22 +167,6 @@ class FakeRuntime:
         if job_id == "running-job":
             return ActionResult(success=True, job_id=job_id, state="running")
         return ActionResult(success=True, job_id=job_id, state="cancelled")
-
-    async def retry(self, job_id: str, target: str = "") -> SubmissionResult:
-        self.retry_calls.append(job_id)
-        if job_id == "missing":
-            raise OrchestrationError("Job does not exist.", code="unknown_job")
-        if job_id == "active-job":
-            raise OrchestrationError("Job cannot be retried from state running.", code="invalid_state")
-        if job_id == "overloaded":
-            raise OrchestrationError(
-                "All candidate targets are temporarily unavailable.",
-                code="targets_unavailable",
-                next_action="Wait for target recovery.",
-                retry_after_s=15,
-            )
-        new_id = f"{job_id}-retry"
-        return SubmissionResult(job_id=new_id, state="queued")
 
     async def job_answer(
         self, job_id: str, answer: str, expected_question_id: str | None = None
@@ -329,36 +309,6 @@ async def test_post_cancel_success_and_edge_cases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_retry_success_and_errors() -> None:
-    runtime = FakeRuntime()
-    app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
-
-    # Successful retry creates new job
-    status, body, headers = await api_request(
-        app, "/dashboard/api/jobs/job-source/retry", headers=valid_headers(), body=b"{}"
-    )
-    assert status == 200
-    assert body == {"job_id": "job-source-retry", "state": "queued", "retry_of": "job-source"}
-    assert body["job_id"] != "job-source"
-    assert headers.get("cache-control") == "no-store"
-
-    # Retry invalid state -> 409
-    status, body, _ = await api_request(
-        app, "/dashboard/api/jobs/active-job/retry", headers=valid_headers(), body=b"{}"
-    )
-    assert status == 409
-    assert body["code"] == "invalid_state"
-
-    # Retry targets unavailable -> 503 with retry info
-    status, body, headers = await api_request(
-        app, "/dashboard/api/jobs/overloaded/retry", headers=valid_headers(), body=b"{}"
-    )
-    assert status == 503
-    assert body["code"] == "targets_unavailable"
-    assert headers.get("retry-after") == "15"
-
-
-@pytest.mark.asyncio
 async def test_post_answer_matching_stale_and_validation() -> None:
     runtime = FakeRuntime()
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -427,13 +377,29 @@ async def test_post_answer_matching_stale_and_validation() -> None:
     assert runtime.answer_calls == []
 
 
+def _attempt(db: Any, job_id: str, target: str, **columns: Any) -> None:
+    """Record one finished attempt row; target, model, duration, and tokens live on attempts."""
+    names = ", ".join(columns)
+    marks = ", ".join("?" for _ in columns)
+    with db._connection:
+        db._connection.execute(
+            "INSERT INTO attempts(job_id, seq, reason, target, state, started_at"
+            + (", " + names if names else "") + ") VALUES (?, 1, 'initial', ?, 'succeeded', 'now'"
+            + (", " + marks if marks else "") + ")",
+            (job_id, target, *columns.values()),
+        )
+
+
+def _commit_lines(db: Any, job_id: str, lines: int) -> None:
+    """Mark the first `lines` transcript lines as committed, as a finished append would."""
+    with db._connection:
+        db._connection.execute("UPDATE jobs SET events_committed=? WHERE id=?", (lines, job_id))
+
+
 def _stats_test_app() -> tuple[Starlette, sqlite3.Connection]:
     connection = sqlite3.connect(":memory:", check_same_thread=False)
     connection.row_factory = sqlite3.Row
-    connection.execute("""CREATE TABLE job_metrics (job_id TEXT, finished_at TEXT, workflow TEXT,
-        target TEXT, backend TEXT, model TEXT, state TEXT, failure_kind TEXT, duration_ms INTEGER,
-        tok_input INTEGER, tok_output INTEGER, tok_cache_read INTEGER, tok_cache_write INTEGER,
-        attempts INTEGER, skipped_targets INTEGER, retry_of TEXT)""")
+    connection.executescript(DDL)
     runtime = SimpleNamespace(database=SimpleNamespace(_connection=connection))
     return Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime))), connection
 
@@ -507,7 +473,7 @@ async def test_runtime_inactive_returns_503() -> None:
 
 @pytest.mark.asyncio
 async def test_get_jobs_contract_and_summary_keys(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="proj-1", root="/path/to/project")
@@ -517,14 +483,15 @@ async def test_get_jobs_contract_and_summary_keys(tmp_path: Any) -> None:
         workflow="workflow-alpha",
         profile="balanced",
         prompt="run alpha",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="sess-1",
-        retry_of="job-orig",
+        from_job="job-orig",
     )
     with db._connection:
         db._connection.execute(
-            "UPDATE jobs SET target='target-1', state='succeeded', failure_kind='timeout' WHERE id='job-alpha'"
+            "UPDATE jobs SET state='succeeded', failure_kind='transient' WHERE id='job-alpha'"
         )
+    _attempt(db, "job-alpha", "target-1")
 
     runtime = SimpleNamespace(database=db)
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -546,7 +513,7 @@ async def test_get_jobs_contract_and_summary_keys(tmp_path: Any) -> None:
     job = body["jobs"][0]
     expected_keys = {
         "id", "state", "project_id", "project_root", "workflow", "profile",
-        "target", "session", "retry_of", "failure_kind", "created_at", "updated_at"
+        "target", "session", "from_job", "failure_kind", "created_at", "updated_at"
     }
     assert set(job.keys()) == expected_keys
     assert job["id"] == "job-alpha"
@@ -557,14 +524,15 @@ async def test_get_jobs_contract_and_summary_keys(tmp_path: Any) -> None:
     assert job["profile"] == "balanced"
     assert job["target"] == "target-1"
     assert job["session"] == "sess-1"
-    assert job["retry_of"] == "job-orig"
-    assert job["failure_kind"] == "timeout"
+    assert job["from_job"] == "job-orig"
+    assert "retry_of" not in job
+    assert job["failure_kind"] == "transient"
     db.close()
 
 
 @pytest.mark.asyncio
 async def test_get_jobs_filters_and_pagination(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     p1 = db.upsert_project(project_id="p1", root="/r1")
@@ -579,14 +547,15 @@ async def test_get_jobs_filters_and_pagination(tmp_path: Any) -> None:
             workflow="wf-1" if i % 2 == 0 else "wf-2",
             profile="balanced",
             prompt=f"p {i}",
-            execution_plan_json="{}",
+            plan_json="{}",
             session="s",
         )
         with db._connection:
             db._connection.execute(
-                "UPDATE jobs SET created_at=?, target=?, state=? WHERE id=?",
-                (f"{now}{i}+00:00", f"tg-{i % 2}", "running" if i == 0 else "succeeded", job_id),
+                "UPDATE jobs SET created_at=?, state=? WHERE id=?",
+                (f"{now}{i}+00:00", "running" if i == 0 else "succeeded", job_id),
             )
+        _attempt(db, job_id, f"tg-{i % 2}")
 
     runtime = SimpleNamespace(database=db)
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -652,7 +621,7 @@ async def test_get_jobs_filters_and_pagination(tmp_path: Any) -> None:
 @pytest.mark.asyncio
 async def test_get_jobs_reads_no_result_files(tmp_path: Any, monkeypatch: Any) -> None:
     from pathlib import Path
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="proj", root="/proj")
@@ -662,7 +631,7 @@ async def test_get_jobs_reads_no_result_files(tmp_path: Any, monkeypatch: Any) -
         workflow="consult",
         profile="balanced",
         prompt="hello",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="sess",
     )
 
@@ -683,7 +652,7 @@ async def test_get_jobs_reads_no_result_files(tmp_path: Any, monkeypatch: Any) -
 
 
 def assert_no_forbidden_keys(obj: Any) -> None:
-    forbidden = {"token", "future", "deadline", "execution_plan", "execution_plan_json", "pgid"}
+    forbidden = {"token", "future", "deadline", "execution_plan", "plan_json", "pgid"}
     if isinstance(obj, dict):
         for k, v in obj.items():
             assert k not in forbidden, f"Forbidden key '{k}' found at key in response!"
@@ -695,8 +664,8 @@ def assert_no_forbidden_keys(obj: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None:
-    from refract.ask import PendingQuestion
-    from refract.database import Database
+    from refract.scheduling.asks import PendingQuestion
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="proj-1", root="/path/to/project")
@@ -706,30 +675,25 @@ async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None
         workflow="consult",
         profile="balanced",
         prompt="the prompt string",
-        execution_plan_json='{"forbidden": "plan"}',
+        plan_json='{"forbidden": "plan"}',
         session="sess-1",
-        retry_of="job-source",
+        from_job="job-source",
     )
     with db._connection:
         db._connection.execute(
             """UPDATE jobs SET
-                target='target-main',
                 state='succeeded',
                 failure_kind=NULL,
                 error='an error message',
-                model='claude-3',
-                duration_ms=450,
                 pgid=1234,
                 started_at='2026-11-05T12:01:00+00:00',
-                finished_at='2026-11-05T12:02:00+00:00',
-                tok_context_used=100,
-                tok_context_window=200,
-                tok_input=50,
-                tok_output=25,
-                tok_cache_read=10,
-                tok_cache_write=5
+                finished_at='2026-11-05T12:02:00+00:00'
             WHERE id='job-detail-test'"""
         )
+    _attempt(
+        db, "job-detail-test", "target-main", model="claude-3", duration_ms=450, tok_context_used=100,
+        tok_context_window=200, tok_input=50, tok_output=25, tok_cache_read=10, tok_cache_write=5,
+    )
     db.results_dir.mkdir(parents=True, exist_ok=True)
     db.result_path("job-detail-test").write_text("the result text", encoding="utf-8")
 
@@ -739,8 +703,6 @@ async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None
                 return PendingQuestion(
                     question_id="q-42",
                     text="Should we continue?",
-                    future=None,
-                    deadline="2026-11-05T13:00:00+00:00",
                 )
             return None
 
@@ -755,7 +717,7 @@ async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None
 
     expected_keys = {
         "id", "state", "project_id", "project_root", "workflow", "profile",
-        "target", "session", "retry_of", "failure_kind", "created_at", "updated_at",
+        "target", "session", "from_job", "failure_kind", "created_at", "updated_at",
         "started_at", "finished_at", "prompt", "result", "pending_question",
     }
     assert set(body.keys()) == expected_keys
@@ -767,7 +729,7 @@ async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None
     assert body["profile"] == "balanced"
     assert body["target"] == "target-main"
     assert body["session"] == "sess-1"
-    assert body["retry_of"] == "job-source"
+    assert body["from_job"] == "job-source"
     assert body["failure_kind"] is None
     assert body["started_at"] == "2026-11-05T12:01:00+00:00"
     assert body["finished_at"] == "2026-11-05T12:02:00+00:00"
@@ -825,7 +787,7 @@ async def test_get_job_detail_contract_and_forbidden_keys(tmp_path: Any) -> None
 
 @pytest.mark.asyncio
 async def test_get_output_1200_events_pagination(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", root="/p1")
@@ -835,7 +797,7 @@ async def test_get_output_1200_events_pagination(tmp_path: Any) -> None:
         workflow="consult",
         profile="balanced",
         prompt="p",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="s",
     )
     with db._connection:
@@ -846,6 +808,7 @@ async def test_get_output_1200_events_pagination(tmp_path: Any) -> None:
     events = [{"kind": f"evt-{i}", "data": {"num": i}} for i in range(1, 1201)]
     stream_content = "".join(json.dumps(e) + "\n" for e in events)
     db.stream_path("job-stream").write_text(stream_content, encoding="utf-8")
+    _commit_lines(db, "job-stream", len(events))
 
     runtime = SimpleNamespace(database=db)
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -886,7 +849,7 @@ async def test_get_output_1200_events_pagination(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_get_output_partial_final_line_withheld(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", root="/p1")
@@ -896,7 +859,7 @@ async def test_get_output_partial_final_line_withheld(tmp_path: Any) -> None:
         workflow="consult",
         profile="balanced",
         prompt="p",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="s",
     )
     with db._connection:
@@ -906,6 +869,7 @@ async def test_get_output_partial_final_line_withheld(tmp_path: Any) -> None:
     # 2 complete lines and 1 partial line with no trailing \n
     content = json.dumps({"kind": "evt-1"}) + "\n" + json.dumps({"kind": "evt-2"}) + "\n" + '{"kind": "evt-incomplete"'
     db.stream_path("job-partial").write_text(content, encoding="utf-8")
+    _commit_lines(db, "job-partial", 2)
 
     runtime = SimpleNamespace(database=db)
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -923,7 +887,7 @@ async def test_get_output_partial_final_line_withheld(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_get_output_authoritative_seq_and_invalid_utf8(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", root="/p1")
@@ -933,7 +897,7 @@ async def test_get_output_authoritative_seq_and_invalid_utf8(tmp_path: Any) -> N
         workflow="consult",
         profile="balanced",
         prompt="p",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="s",
     )
     with db._connection:
@@ -946,6 +910,7 @@ async def test_get_output_authoritative_seq_and_invalid_utf8(tmp_path: Any) -> N
 
     stream_file = db.stream_path("job-seq-test")
     stream_file.write_bytes(line1 + line2 + line3)
+    _commit_lines(db, "job-seq-test", 3)
 
     runtime = SimpleNamespace(database=db)
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=runtime)))
@@ -965,7 +930,7 @@ async def test_get_output_authoritative_seq_and_invalid_utf8(tmp_path: Any) -> N
 
 @pytest.mark.asyncio
 async def test_get_output_missing_stream_file(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", root="/p1")
@@ -975,7 +940,7 @@ async def test_get_output_missing_stream_file(tmp_path: Any) -> None:
         workflow="consult",
         profile="balanced",
         prompt="p",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="s",
     )
     with db._connection:
@@ -999,7 +964,7 @@ async def test_get_output_missing_stream_file(tmp_path: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_get_output_invalid_after_and_unknown_job(tmp_path: Any) -> None:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     project = db.upsert_project(project_id="p1", root="/p1")
@@ -1009,7 +974,7 @@ async def test_get_output_invalid_after_and_unknown_job(tmp_path: Any) -> None:
         workflow="consult",
         profile="balanced",
         prompt="p",
-        execution_plan_json="{}",
+        plan_json="{}",
         session="s",
     )
 
@@ -1082,8 +1047,8 @@ async def test_api_fallback_404_and_loopback_matrix() -> None:
     assert status == 404
     assert body["code"] == "not_found"
 
-    # Unsupported method on registered API route (POST /dashboard/api/jobs) -> 404 not_found
-    status, body, _ = await api_request(app, "/dashboard/api/jobs", method="POST")
+    # Unsupported method on registered API route (POST /dashboard/api/targets) -> 404 not_found
+    status, body, _ = await api_request(app, "/dashboard/api/targets", method="POST")
     assert status == 404
     assert body["code"] == "not_found"
     assert body["unchanged"] == "Nothing was modified."
@@ -1102,7 +1067,7 @@ async def test_api_fallback_404_and_loopback_matrix() -> None:
 
 
 def _card_app(tmp_path: Any) -> tuple[Starlette, Any]:
-    from refract.database import Database
+    from refract.store.database import Database
 
     db = Database(tmp_path / "refract.db")
     app = Starlette(routes=register_dashboard_routes(DashboardState(runtime=SimpleNamespace(database=db))))
@@ -1112,7 +1077,7 @@ def _card_app(tmp_path: Any) -> tuple[Starlette, Any]:
 def _card_job(db: Any, project_id: str, job_id: str) -> None:
     db.create_job(
         job_id=job_id, project_id=project_id, workflow="implement", profile="default",
-        prompt="p", execution_plan_json="{}", session="s",
+        prompt="p", plan_json="{}", session="s",
     )
 
 
@@ -1197,7 +1162,7 @@ async def test_get_card_detail_shapes_and_pruned_job(tmp_path: Any) -> None:
     db.finish_job("job-old", "succeeded", text="x", target="primary")
     db.create_card(card_id="c1", project_id=p1, title="T", body="the body", job_ids=["job-old", "job-live"])
     db.move_card(card_id="c1", state="in_progress", job_ids=[], note="started")
-    db.prune_history("9999-01-01T00:00:00Z")
+    db.prune_retention(content_before="9999-01-01T00:00:00Z", rows_before="9999-01-01T00:00:00Z")
 
     status, body, headers = await api_request(app, "/dashboard/api/cards/c1", method="GET")
     assert status == 200
@@ -1273,7 +1238,7 @@ _CSRF_REJECTIONS = [
 
 @pytest.mark.parametrize(("header_options", "request_options", "status", "code", "message"), _CSRF_REJECTIONS)
 def test_check_csrf_rejects_with_status_and_message(header_options, request_options, status, code, message) -> None:
-    from refract.dashboard import _check_csrf
+    from refract.api.http.common import check_csrf as _check_csrf
 
     response = _check_csrf(_csrf_request(valid_headers(**header_options), **request_options))
     assert response is not None
@@ -1299,7 +1264,7 @@ def test_check_csrf_rejects_with_status_and_message(header_options, request_opti
     ],
 )
 def test_check_csrf_rejects_absent_headers(headers, status, message) -> None:
-    from refract.dashboard import _check_csrf
+    from refract.api.http.common import check_csrf as _check_csrf
 
     response = _check_csrf(_csrf_request(headers))
     assert response is not None
@@ -1319,7 +1284,7 @@ def test_check_csrf_rejects_absent_headers(headers, status, message) -> None:
     ],
 )
 def test_check_csrf_accepts_same_origin_requests(headers, scheme, host) -> None:
-    from refract.dashboard import _check_csrf
+    from refract.api.http.common import check_csrf as _check_csrf
 
     assert _check_csrf(_csrf_request(headers, scheme=scheme, host=host)) is None
 
@@ -1357,7 +1322,7 @@ _ASK_BAD_REQUEST = [
 async def test_ask_route_rejects_bad_requests(body, message) -> None:
     registry = _AskRegistry()
     status, parsed, _ = await api_request(_ask_app(SimpleNamespace(ask_registry=registry, config=SimpleNamespace())), "/ask", body=body)
-    assert (status, parsed["error"], parsed["code"]) == (400, message, "bad_request")
+    assert (status, parsed["error"], parsed["code"]) == (400, message, "invalid_request")
     assert registry.calls == []
 
 
@@ -1401,7 +1366,7 @@ async def test_ask_route_job_id_sources_and_default_timeout(body, headers, path,
     ],
 )
 async def test_ask_route_maps_registry_errors(error, status, message, code) -> None:
-    from refract.ask import AskAuthError, AskConflictError
+    from refract.scheduling.asks import AskAuthError, AskConflictError
 
     registry = _AskRegistry({"auth": AskAuthError("no"), "conflict": AskConflictError("busy")}[error])
     got_status, parsed, _ = await api_request(

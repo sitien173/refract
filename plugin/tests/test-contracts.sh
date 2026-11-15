@@ -78,15 +78,15 @@ contract_flat = " ".join(contract.split())
 tool_table = contract.split("## Nine tools", 1)[1].split("## ", 1)[0]
 tool_rows = re.findall(r"^\| `([a-z_]+)` \| (.*?) \| (.*?) \|$", tool_table, re.M)
 assert [row[0] for row in tool_rows] == [
-    "submit", "wait", "answer", "cancel", "retry", "list",
+    "submit", "get", "wait", "cancel", "answer", "list",
     "card_create", "card_move", "card_list",
 ], tool_rows
 assert [row[1:] for row in tool_rows] == [
-    ("`path`, `workflow`, `prompt`, `profile=\"\"`, `session=\"\"`, `fresh=false`", "`{job}`"),
-    ("`job_id`, `timeout_s=3600`", "`{job, result}`"),
+    ("`path`, `workflow`, `prompt`, `profile=\"\"`, `session=\"\"`, `fresh=null`, `from_job=\"\"`, `target=\"\"`", "`{job}`"),
+    ("`job_id`", "`{job, result, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens, attempts}`"),
+    ("`job_ids`, `timeout_s=3600`", "`{job, result, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens}`"),
+    ("`job_id`", "`{job, cancel_status}`"),
     ("`job_id`, `answer`", "`{job}`"),
-    ("`job_id`", "`{job}`"),
-    ("`job_id`, `target=\"\"`", "`{job}` for a new job with `retry_of` set"),
     ("`path`", "`{active, recent, workflows, profiles, guidance}`"),
     ("`path`, `title`, `body=\"\"`, `job_ids=()`", "`{card}`"),
     ("`card_id`, `state`, `job_ids=()`, `note=\"\"`", "`{card, moved}`"),
@@ -94,25 +94,30 @@ assert [row[1:] for row in tool_rows] == [
 ], tool_rows
 for detail in (
     "Call only these tools with only these parameters",
-    "`job`: `id, project, workflow, profile, target, session, state, retry_of, created_at, updated_at`.",
-    "`result`: `text, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens`.",
+    "`job`: `id, project, workflow, profile, target_id, session, state, from_job, created_at, updated_at`.",
+    "`result` is the job text. `truncated`, `result_path`, `pending_question`, `failure_kind`, `next_target`, `model`, `duration_ms`, and `tokens` sit beside `job` and `result`.",
+    "`cancel_status` is `terminated` (queued), `requested` (running), or `already_terminal`, which `cancel` never changes.",
     "`tokens`: `context_used, context_window, input, output, cache_read, cache_write`, each an integer or null.",
     "Unknown tool arguments return `invalid_request`.",
     "`path` is any directory inside the project; Refract resolves its Git root. A path outside Git returns `invalid_path`.",
     "Jobs are admitted FIFO up to the global `max_jobs` capacity, and jobs in the same project may run concurrently. Concurrent jobs share the project checkout and can edit the same files. Jobs that share a project, `session`, workflow, and target run one at a time.",
     "`timeout_s` accepts 0..3600.",
-    "`result.pending_question` (`{question_id, text}`)",
+    "`pending_question` (`{question_id, text}`)",
     "`answer` without a pending question, after the question expired, or on a terminal job returns `invalid_state`.",
-    "Every terminal job writes its full text to `result.result_path`. When `result.truncated` is true, read the full text from that file.",
-    "`failure_kind` is null on success, else one of `cancelled`, `circuit_open`, `replay_blocked`, `context_overflow`, `request_fatal`, `target_fatal`, `transient`.",
-    "The new job from `retry` keeps the source job's `session` and `fresh` values.",
+    "A result that exceeds the byte limit is truncated. The response then carries `truncated: true` and `result_path`; when `truncated` is true, read the full text from `result_path`.",
+    "`failure_kind` is null on success, else one of `cancelled`, `circuit_open`, `context_overflow`, `request_fatal`, `target_fatal`, `transient`.",
+    "`submit(from_job=X)` copies a `succeeded`, `failed`, `cancelled`, or `interrupted` job and never changes it.",
+    "It keeps the source job's `session`; `fresh` copies the source job unless set.",
+    "`fresh` defaults to null. Without `from_job`, null means false. With `from_job`, omitting `fresh` copies the source job's value, and an explicit `fresh=false` overrides a source job that used `fresh=true`.",
+    "When an attempt is `replay_safe`, the server retries on the same target, opens a fresh session on `context_overflow`, and falls back to the next target on its own, recording each step in `attempts`.",
+    "`wait(job_ids)` takes 1 to 16 distinct IDs and returns the first ready job.",
     "Responses stay below 30,000 characters and 9,000 UTF-8 bytes.",
     "Capture `job.id` from returned envelopes.",
 ):
     assert detail in contract_flat, detail
 for removed in (
     "project_" "resolve", "task_" "guide", "job_" "list", "job_" "report_error",
-    "result_" "offset", "next_" "offset", "fresh_" "session", "context_" "key",
+    "result_" "offset", "next_" "offset", "context_" "key",
     "retry" "able", "project_" "id", "job_" "submit", "job_" "wait", "job_" "answer",
     "job_" "cancel", "job_" "retry", "project_" "register",
 ):
@@ -171,7 +176,7 @@ assert mcp == {
 assert "/home/" not in json.dumps(mcp)
 default_port = int(re.search(
     r"^DEFAULT_PORT = (\d+)$",
-    (repository / "server/src/refract/config.py").read_text(),
+    (repository / "server/src/refract/config/models.py").read_text(),
     re.M,
 ).group(1))
 default_endpoint = f"http://127.0.0.1:{default_port}/mcp"
@@ -198,14 +203,14 @@ assert "consolidation procedure" in (root / "skills/coordinating-multi-model-wor
 
 review = (root / "skills/coordinating-multi-model-work/references/review.md").read_text()
 assert "partial local effects" in review
-assert "retry(job_id, target=X)" in review
+assert "submit(from_job=<job id>, target=X)" in review
 assert "tool-contract.md#recovery" in review
 
 readme = (repository / "server/README.md").read_text()
 assert "Nine self-describing MCP tools" in readme
 assert "### Recovery and Routing" in readme
 assert "### Diagnostic Reporting" not in readme
-assert "`result.result_path`" in readme
+assert "`result_path`" in readme
 assert "invalid_request" in readme
 
 for path in (root / "shared").glob("*.md"):
@@ -404,20 +409,20 @@ if grep -q -E 'depends_on|cancelled_dependents|invalid_dependency|dependency_fai
     printf 'removed job dependency surface remains in tool contract\n' >&2
     exit 1
 fi
-grep -qF 'When `result.truncated` is true, read the full text from that file.' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'when `truncated` is true, read the full text from `result_path`.' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q '`other` requires an explicit mapping' skills/coordinating-multi-model-work/references/tool-contract.md
 # Preserve source-freeze and temporary-checkpoint policy guards.
 grep -q 'After submission, do not edit the root until that job is terminal.' skills/coordinating-multi-model-work/SKILL.md
 grep -q 'Create a temporary checkpoint commit only after it passes.' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.failure_kind' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'retry(job_id)' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.next_target' skills/coordinating-multi-model-work/SKILL.md
-grep -qF 'result.next_target' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF 'read `failure_kind`' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'submit(from_job=<job id>)' skills/coordinating-multi-model-work/SKILL.md
+grep -qF 'onto `next_target`' skills/coordinating-multi-model-work/SKILL.md
+grep -qF '`next_target`' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -qF 'result.metadata.' skills/coordinating-multi-model-work/SKILL.md skills/coordinating-multi-model-work/references/tool-contract.md; then
     printf 'v2 result.metadata path found in coordinator guidance\n' >&2
     exit 1
 fi
-grep -qF '`result.tokens.context_used` exceeds 150,000' skills/coordinating-multi-model-work/references/tool-contract.md
+grep -qF '`tokens.context_used` exceeds 150,000' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -q 'Always start every phase with `fresh=true`' skills/coordinating-multi-model-work/references/tool-contract.md
 grep -qF 'For follow-up jobs within the same phase' skills/coordinating-multi-model-work/references/tool-contract.md
 if grep -q -E 'result\.metadata\.failure_kind|result\.metadata\.context_window_used' skills/coordinating-multi-model-work/SKILL.md skills/coordinating-multi-model-work/references/tool-contract.md; then

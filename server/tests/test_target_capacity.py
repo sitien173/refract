@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from refract.execution import TargetExecutor
-from refract.scheduler import CancelEvent
+from refract.runner.attempts import TargetExecutor
+from refract.scheduling.cancel import CancelEvent
 
 
 @pytest.mark.asyncio
@@ -45,11 +45,11 @@ async def test_capacity_task_cancellation_does_not_leak_permit():
 
 
 @pytest.mark.asyncio
-async def test_full_first_target_records_zero_skipped_targets(tmp_path):
+async def test_full_first_target_records_no_fallback_attempt(tmp_path):
     from dataclasses import replace
     from refract.config import TargetConfig, TargetSelection
-    from refract.drivers import DriverResult
-    from refract.planning import resolve_execution_plan
+    from refract.runner.drivers import DriverResult
+    from refract.runner.planning import resolve_execution_plan
     from refract.runtime import Runtime
     from refract.workflows import get_workflow
     from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
@@ -82,9 +82,9 @@ async def test_full_first_target_records_zero_skipped_targets(tmp_path):
         job = await runtime.wait(submission.job_id, 10)
         assert job.state == "succeeded"
         row = runtime.database._connection.execute(
-            "SELECT skipped_targets FROM job_metrics WHERE job_id=?", (submission.job_id,),
+            "SELECT COUNT(*) AS fallbacks FROM attempts WHERE job_id=? AND reason='fallback'", (submission.job_id,),
         ).fetchone()
-        assert row["skipped_targets"] == 0
+        assert row["fallbacks"] == 0
     finally:
         await runtime.close()
 
@@ -93,8 +93,8 @@ async def test_full_first_target_records_zero_skipped_targets(tmp_path):
 async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_path):
     from dataclasses import replace
     from refract.config import RetryPolicy, TargetConfig, TargetSelection
-    from refract.drivers import DriverResult
-    from refract.planning import resolve_execution_plan, target_execution_key
+    from refract.runner.drivers import DriverResult
+    from refract.runner.planning import resolve_execution_plan, target_execution_key
     from refract.runtime import Runtime
     from refract.workflows import get_workflow
     from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
@@ -159,7 +159,7 @@ async def test_concurrent_probe_ownership_during_retries_blocks_other_probe(tmp_
 async def test_same_project_jobs_run_concurrently_but_serialize_per_session(tmp_path):
     from dataclasses import replace
     from refract.config import TargetConfig
-    from refract.drivers import DriverResult
+    from refract.runner.drivers import DriverResult
     from refract.runtime import Runtime
     from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
 
@@ -196,6 +196,61 @@ async def test_same_project_jobs_run_concurrently_but_serialize_per_session(tmp_
         for submission in (a1, b1, a2):
             assert (await runtime.wait(submission.job_id, 10)).state == "succeeded"
         assert resumed == {"a1": "", "b1": "", "a2": "sid-a1"}
+    finally:
+        release.set()
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_session_waiters_do_not_block_other_sessions_at_full_capacity(tmp_path):
+    from dataclasses import replace
+    from refract.config import TargetConfig
+    from refract.runner.drivers import DriverResult
+    from refract.runtime import Runtime
+    from tests.orchestration_helpers import FakeDrivers, config, repository, register_project
+
+    root = repository(tmp_path)
+    targets = (TargetConfig(id="primary", backend="codex", max_concurrency=4),)
+    catalog = replace(config(tmp_path / "home", targets), max_jobs=4)
+    release = asyncio.Event()
+    first_s_running = asyncio.Event()
+    t_running = asyncio.Event()
+    started: list[str] = []
+
+    class GateDrivers(FakeDrivers):
+        async def execute(self, *, prompt, session_id, **kwargs):
+            started.append(prompt)
+            if prompt == "session t":
+                t_running.set()
+            elif "session s" in prompt:
+                first_s_running.set()
+                await release.wait()
+            return DriverResult("SUCCESS", session_id or "sid", "done", "", "")
+
+    async def until(predicate) -> None:
+        # Deadlock guard only; the checks below are driven by events, not by elapsed time.
+        async with asyncio.timeout(30):
+            while not predicate():
+                await asyncio.sleep(0)
+
+    runtime = Runtime(catalog)
+    runtime.drivers = GateDrivers()
+    await runtime.start()
+    try:
+        project = register_project(runtime, str(root))
+        waiting = [await runtime.submit(project.id, "consult", f"session s {n}", session="s") for n in range(4)]
+        async with asyncio.timeout(30):
+            await first_s_running.wait()
+        await until(lambda: runtime.scheduler.queued_jobs == 3)
+        other = await runtime.submit(project.id, "consult", "session t", session="t")
+        async with asyncio.timeout(30):
+            await t_running.wait()
+        assert not release.is_set()
+        assert sum("session s" in p for p in started) == 1
+        release.set()
+        assert (await runtime.wait(other.job_id, 30)).state == "succeeded"
+        for submission in waiting:
+            assert (await runtime.wait(submission.job_id, 30)).state == "succeeded"
     finally:
         release.set()
         await runtime.close()

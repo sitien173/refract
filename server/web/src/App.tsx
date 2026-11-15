@@ -7,6 +7,7 @@ import { useBoardCards, useCardDetail, useJobDetail, useStats, useTargets } from
 import { useJobActions } from "./hooks/useJobActions";
 import { useJobPages } from "./hooks/useJobPages";
 import { useJobTranscript } from "./hooks/useJobTranscript";
+import { useServerEvents } from "./hooks/useServerEvents";
 import { type DashboardTab, jobPath, readRoute, tabUrl } from "./router";
 import { BoardView } from "./views/BoardView";
 import { ConsoleView } from "./views/ConsoleView";
@@ -75,6 +76,8 @@ export function App() {
   const cardError = cardQuery.error instanceof Error ? { status: (cardQuery.error as DashboardApiError).status, message: cardQuery.error.message } : null;
 
   const output = useJobTranscript(route.jobId);
+
+  useServerEvents();
 
   useEffect(() => {
     const onPopState = () => {

@@ -22,7 +22,7 @@ uv run refract --help
 
 | Command | Purpose |
 | --- | --- |
-| `refract serve` | Run the daemon. Flags: `--host`, `--port`, `--log-level`, `--log-file`, `--allow-remote`. |
+| `refract serve` | Run the daemon. Flags: `--host`, `--port`, `--log-level`, `--log-file`. |
 | `refract doctor` | Check that the state directory is writable and every target executable resolves. |
 | `refract status` | Report whether the configured daemon answers and its PID when available. Exit 0 when running, 1 otherwise. |
 | `refract stop [--force]` | Stop the daemon when idle. `--force` interrupts running jobs and keeps queued jobs for the next start. |
@@ -34,11 +34,13 @@ uv run refract --help
 | `refract stats [--days N] [--json]` | Show local usage stats. `--days` is `1`, `7`, `30`, or `365`; the default is `7`. `--json` prints the API response unchanged. Needs a running daemon. |
 
 > [!WARNING]
-> The MCP endpoint has no authentication. `refract serve` refuses a non-loopback host unless you pass `--allow-remote`.
+> The MCP endpoint has no authentication. `refract serve` refuses a non-loopback host and has no override flag. `/mcp` rejects a request with a non-loopback Host or Origin.
 
 ## Configuration
 
 The daemon reads `~/.refract/config.toml`. Set `REFRACT_HOME` to use another state directory. [`config.v3.toml`](config.v3.toml) is a complete example covering every key.
+
+The file must set `schema_version = 1` at the top level. A missing `schema_version` or an unknown key stops the daemon with `config_invalid`, a `loc`, and a fix hint.
 
 The daemon reloads targets and profiles on the next tool call after the file changes. A `[daemon]` host or port change needs a restart.
 
@@ -72,7 +74,7 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 | `args` | Extra CLI options, one token per array item |
 | `max_concurrency` | Jobs this target runs at once; default `1` |
 | `context_window` | Context capacity reported in `result.tokens`; overrides the backend's value |
-| `retry` | `{ attempts, codes, patterns }`: retry a retryable failure on the same target |
+| `retry` | `{ attempts, codes, patterns }`: retry a matching failure on the same target. A policy without `codes` or `patterns` retries nothing. |
 | `env` | Environment variables for the worker process |
 
 > [!IMPORTANT]
@@ -103,7 +105,7 @@ A target is one worker CLI with fixed settings. `id` and `backend` are required.
 
 A request fatal failure is not retried and does not count toward the circuit breaker. A target fatal failure is not retried and opens the target circuit at once.
 
-An old `retry.codes` value from a prior version is accepted without a migration error and never matches.
+An unknown `retry.codes` value fails config loading with `config_invalid` at the exact `loc`. A value removed in 3.0.4 names its replacement:
 
 | Removed code | Replacement |
 | --- | --- |
@@ -143,27 +145,33 @@ The daemon serves MCP at `http://127.0.0.1:8765/mcp`. Nine self-describing MCP t
 
 | Tool | Purpose |
 | --- | --- |
-| `list` | Active and recent jobs, workflows, profiles, and guidance for a project |
-| `submit` | Queue a job with a workflow, prompt, and optional profile and session |
-| `wait` | Block until a job finishes or asks a question |
+| `submit` | Queue a job with a workflow and prompt, or pass `from_job` to copy a finished job. With `from_job`, only `target` and `fresh` may be set. |
+| `get` | Read a job without waiting: its result, pending question, and attempts |
+| `wait` | Block until any of 1 to 16 listed `job_ids` finishes or asks a question |
+| `cancel` | Stop a queued or running job; returns `cancel_status` |
 | `answer` | Reply to a worker's pending question |
-| `cancel` | Stop a queued or running job |
-| `retry` | Create a new job from a finished one on the next target |
+| `list` | Active and recent jobs, workflows, profiles, and guidance for a project |
 | `card_create`, `card_move`, `card_list` | Track work on a per-repository board |
 
 The same URL serves two protocol generations. Requests for protocol 2026-07-28 are stateless: there is no `initialize` call and no session. Clients from 2025 call `initialize` and receive an `Mcp-Session-Id` session. Those sessions do not expire while idle. Refract advertises no change notifications and no resource subscriptions, and `subscriptions/listen` is refused. For protocol 2026-07-28 only, `tools/list` carries a cache hint of 5 minutes with private scope. Responses to 2025-era clients carry no cache hint.
 
 Jobs are admitted first in, first out, up to `max_jobs` across all projects. Several jobs in one project can run at once and edit the same checkout. Jobs that share a project, session, workflow, and target run one at a time.
 
-`wait` returns `{job, result}`. Every finished job writes its full text to `result.result_path`; read it when `result.truncated` is true.
+`wait` and `get` return `{job, result, truncated, result_path, pending_question, failure_kind, next_target, model, duration_ms, tokens}`; `get` adds `attempts`. A response stays below 9,000 UTF-8 bytes. A longer result is truncated and carries `truncated: true` and `result_path`; read the full text from that file. `cancel` returns `{job, cancel_status}`, where `cancel_status` is `terminated` for a queued job, `requested` for a running job, and `already_terminal` for a finished job, which is never changed.
 
 ### Recovery and Routing
 
-- `retry(job_id)` runs the request again on `result.next_target`, the next healthy target in profile order. `retry(job_id, target=X)` pins a target.
-- On `failure_kind` `context_overflow`, submit again with `fresh=true`.
-- On `replay_blocked`, the worker already changed files. Inspect the checkout before retrying.
+- `submit(from_job=X)` runs a finished job again. The source job must be terminal and not pruned. Without `target`, the new job uses the target after the source job's last attempt; with none left, the error is `targets_unavailable`. `target` and `fresh` are the only other parameters. `fresh` defaults to null. Without `from_job`, null means false. With `from_job`, omitting `fresh` copies the source job's value, and an explicit `fresh=false` overrides a source job that used `fresh=true`.
+- When an attempt is `replay_safe`, the server recovers inside the same job and records one `attempts` row per step. A failure that matches `retry.codes` or `retry.patterns` retries on the same target. `context_overflow` opens one fresh session. A `transient` or `target_fatal` failure falls back to the next eligible target. The `attempts.reason` values are `initial`, `retry`, `fresh_session`, and `fallback`.
+- An attempt is `replay_safe` only when the target streams events, no `tool.started` event occurred, and the worker asked no question. A failed attempt that is not `replay_safe` is not recovered, so the job ends with `failure_kind`, plus `next_target` when one remains. Inspect the checkout before calling `submit(from_job=...)`.
 - An open circuit skips a target until its cooldown ends. When no target is available, the error is `targets_unavailable` with `retry_after_s`.
 - Errors return `code`, `message`, and `next_action`. `invalid_request` means the arguments did not match the schema or named an unknown target.
+
+### Restart policy
+
+On daemon start, `running` jobs become `interrupted`, `open` questions become `expired`, and `queued` jobs resume. Refract never re-runs an interrupted job by itself. The Coordinator calls `submit(from_job=...)` to run it again. A blocked `wait` sees the new state on its next DB read.
+
+On the first start, a database with a `user_version` other than 1 is renamed to `refract.db.<user_version>.bak`, with its `-wal` and `-shm` files, and a new database is created. Refract never deletes the `.bak` file, and the old job history does not appear in the dashboard.
 
 The full contract for Coordinator agents is in [`tool-contract.md`](../plugin/skills/coordinating-multi-model-work/references/tool-contract.md).
 
@@ -173,13 +181,13 @@ Each worker gets `REFRACT_ASK_URL` and `REFRACT_ASK_TOKEN` in its environment. R
 
 ## Dashboard
 
-Open `http://127.0.0.1:8765/dashboard/` while the daemon runs. It shows jobs with live transcripts, target health, and the card board. You can cancel, retry, and answer jobs from it. Dashboard routes accept loopback clients only.
+Open `http://127.0.0.1:8765/dashboard/` while the daemon runs. It shows jobs with live transcripts, target health, and the card board. You can cancel, retry, and answer jobs from it. Retry calls `POST /dashboard/api/jobs` with `from_job`. The page subscribes to `GET /dashboard/api/events` and falls back to 30-second polling. Dashboard routes accept loopback clients only.
 
 The Insights view at `/dashboard/insights` shows the numbers that `refract stats` prints. See [Stats](#stats).
 
 ## Stats
 
-`refract stats` and the Insights view read the `job_metrics` table. Refract writes one row for each terminal job and keeps it for 365 days, so stats outlast the 7-day job history. The row holds no prompt, result, error text, project path, or session.
+`refract stats` and the Insights view read the `jobs` and `attempts` tables. Job rows are kept for 365 days. The prompt, result, and transcript are pruned after 7 days, so stats outlast the 7-day job content.
 
 `GET /dashboard/api/stats?days=<1|7|30|365>&tz_offset_minutes=<int>` serves both. `tz_offset_minutes` ranges from -1440 to 1440 and defaults to `0`. A bad value returns HTTP 400.
 
@@ -192,18 +200,16 @@ A window of N days covers the last N times 24 hours from the request time. It is
 | Group | Definition |
 | --- | --- |
 | Work delegated | Jobs by workflow and state, plus a breakdown by profile, workflow, target, and state. Worker hours are `sum(duration_ms) / 3,600,000`. Success rate is `succeeded / (succeeded + failed)`. The daily series counts succeeded and failed jobs. |
-| Failover saves | `skipped_targets`: succeeded jobs that passed over at least one target. `retries`: succeeded jobs with more than one attempt. `retries_after_failure`: succeeded jobs in the window whose `retry_of` names a failed job anywhere in the retained metrics. Succeeded jobs with unknown values count under `unknown_skipped_targets` and `unknown_attempts`, not as zero. Jobs in other states are not counted in either. |
+| Failover saves | `skipped_targets`: succeeded jobs that passed over at least one target. `retries`: succeeded jobs with more than one attempt. `attempts_by_reason`: attempt counts grouped by `attempts.reason`: `initial`, `retry`, `fresh_session`, and `fallback`. Succeeded jobs with unknown values count under `unknown_skipped_targets` and `unknown_attempts`, not as zero. Jobs in other states are not counted in either. |
 | Tokens | For each backend, model, and target: uncached input, output, cache read, cache write, and job count. Cache hit ratio is `cache_read / (uncached_input + cache_read)`. |
 
 Uncached input is `max(0, input - cache components)`, where the components are those that the backend already counts in `input`. These are `cache_read` for `codex`, and `cache_read` plus `cache_write` for `claude` and `pi`. For `agy` and an empty backend, Refract subtracts nothing. A job that ended before target selection appears as `unassigned`.
 
-Jobs that migrated from an older database have unknown `attempts` and `skipped_targets`.
-
 `refract stats` prints the job count, worker hours, success rate, failover saves, and model count. Use `--json` for every field.
 
-### Database schema 21
+### Database schema 1
 
-Schema 20 added `job_metrics`. Schema 21 adds `job_metrics.profile`. The first start of this version migrates a schema 20, 19, or 18 database in place and backfills `job_metrics` from jobs still stored. Metrics rows whose job was already pruned get an empty profile and show as `unknown`. A Refract version that supports only an older schema refuses a schema 21 database with an error and leaves the file unchanged. To go back, install the older version and point `REFRACT_HOME` at another state directory, or restore a copy of `refract.db` made before the upgrade.
+The database has `PRAGMA user_version=1`. A database created by a Refract version that predates schema 1, or by a schema 1 build before commit `45139dd5`, must be recreated; see [Restart policy](#restart-policy) for the `.bak` rename.
 
 ## Environment variables
 

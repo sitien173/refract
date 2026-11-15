@@ -41,7 +41,8 @@ describe("useJobActions", () => {
     const announce = vi.fn();
     const onRetried = vi.fn();
     const onStaleQuestion = vi.fn();
-    const post = vi.fn().mockResolvedValue({ job_id: "job-1-retry", state: "queued" });
+    const post = vi.fn();
+    const submit = vi.fn().mockResolvedValue({ job_id: "job-1-retry", state: "queued", from_job: "job-1" });
 
     const hook = renderHook(
       () =>
@@ -51,6 +52,7 @@ describe("useJobActions", () => {
           onRetried,
           onStaleQuestion,
           post,
+          submit,
         }),
       { wrapper: createQueryWrapper(queryClient) },
     );
@@ -59,7 +61,8 @@ describe("useJobActions", () => {
       await hook.result.current.retry();
     });
 
-    expect(post).toHaveBeenCalledWith("job-1", "retry", {});
+    expect(submit).toHaveBeenCalledWith("job-1");
+    expect(post).not.toHaveBeenCalled();
     expect(onRetried).toHaveBeenCalledWith("job-1-retry");
     expect(announce).toHaveBeenCalledWith("Retry started");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["job", "job-1"] });

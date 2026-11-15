@@ -21,7 +21,9 @@ from refract.logging_setup import (
 
 
 def _strict_config(logging: str) -> str:
-    return f"""[daemon]
+    return f"""schema_version = 1
+
+[daemon]
 default_profile = "balanced"
 
 [[targets]]
@@ -291,3 +293,19 @@ def test_redact_text_sanitizes_bearer_tokens_and_api_keys() -> None:
     assert "[REDACTED]" in sanitized
     assert "1234567890abcdef" not in sanitized
     assert "topsecret" not in sanitized
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "", "  ", "none", "None", "off", "OFF", "-"])
+def test_log_file_disable_helper_accepts_every_sentinel(value) -> None:
+    assert logging_setup.is_log_file_disabled(value) is True
+
+
+@pytest.mark.parametrize("value", ["refract.log", "/tmp/x.log", "no", "offline"])
+def test_log_file_disable_helper_rejects_paths(value) -> None:
+    assert logging_setup.is_log_file_disabled(value) is False
+
+
+def test_cli_override_and_config_share_the_disable_helper(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REFRACT_HOME", str(tmp_path))
+    for value in ("false", "off", "-", "None", ""):
+        assert logging_setup._log_file_override(value) is None

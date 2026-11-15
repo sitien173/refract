@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from refract.config import DaemonConfig, ProfileDeclaration, TargetConfig, TargetSelection
-from refract.drivers import DriverResult
+from refract.runner.drivers import DriverResult
 from refract.models import ProjectView
 
 

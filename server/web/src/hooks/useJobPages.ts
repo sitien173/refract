@@ -1,6 +1,7 @@
 import { type InfiniteData, keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getJobs, type JobPage, type JobSummary } from "../api";
+import { FALLBACK_POLL_MS } from "./queries";
 
 type Filters = Record<string, string | undefined>;
 type LoadJobs = (filters: Filters, signal?: AbortSignal) => Promise<JobPage>;
@@ -35,7 +36,7 @@ export function useJobPages(filters: Record<string, string>, load: LoadJobs = ge
     },
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? null,
-    refetchInterval: (q) => (q.state.error ? 5000 : 1000),
+    refetchInterval: (q) => (q.state.error ? 5000 : FALLBACK_POLL_MS),
     placeholderData: keepPreviousData,
     enabled,
     select: (data: InfiniteData<JobPage, string | null>) => {

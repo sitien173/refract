@@ -1,6 +1,8 @@
 # Refract v3 example config. Copy to ~/.refract/config.toml and edit.
 # Every value below is a placeholder. Do not commit real credentials.
 
+schema_version = 1
+
 [daemon]
 host = "127.0.0.1"
 port = 8765
@@ -39,7 +41,7 @@ model = "openai-codex/gpt-5.6-luna"
 reasoning = "high"
 args = ["--no-context-files", "--no-extensions", "--no-skills", "--no-prompt-templates", "--tools", "read,grep,find,ls"]
 system_prompt = "Review only. Never modify files."
-retry = { attempts = 1 }
+retry = { attempts = 1, codes = ["timeout"], patterns = ["overloaded"] }
 
 [[targets]]
 id = "claude-opus-code"

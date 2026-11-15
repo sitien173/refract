@@ -7,7 +7,7 @@ from refract.config import DaemonConfig
 from refract.runtime import Runtime
 
 
-def test_retention_prunes_old_jobs_but_keeps_metrics_until_365_days(tmp_path):
+def test_retention_prunes_content_at_7_days_and_rows_at_365_days(tmp_path):
     from datetime import datetime, timedelta, timezone
 
     runtime = Runtime(DaemonConfig(home=tmp_path))
@@ -17,7 +17,7 @@ def test_retention_prunes_old_jobs_but_keeps_metrics_until_365_days(tmp_path):
         for job_id in ("eight-days", "four-hundred-days"):
             database.create_job(
                 job_id=job_id, project_id="p", workflow="consult", profile="p",
-                prompt="hello", execution_plan_json="{}", session=job_id,
+                prompt="hello", plan_json="{}", session=job_id,
             )
             database.finish_job(job_id, "succeeded")
         now = datetime.now(timezone.utc)
@@ -29,22 +29,16 @@ def test_retention_prunes_old_jobs_but_keeps_metrics_until_365_days(tmp_path):
                 (eight_days,),
             )
             database._connection.execute(
-                "UPDATE job_metrics SET finished_at=? WHERE job_id='eight-days'", (eight_days,),
-            )
-            database._connection.execute(
-                "UPDATE job_metrics SET finished_at=? WHERE job_id='four-hundred-days'",
-                (four_hundred_days,),
+                "UPDATE jobs SET updated_at=? WHERE id='four-hundred-days'", (four_hundred_days,),
             )
 
         runtime.prune_retained_transcripts()
 
-        assert database.job_record("eight-days") is None
-        assert database._connection.execute(
-            "SELECT 1 FROM job_metrics WHERE job_id='eight-days'"
-        ).fetchone() is not None
-        assert database._connection.execute(
-            "SELECT 1 FROM job_metrics WHERE job_id='four-hundred-days'"
-        ).fetchone() is None
+        eight = database.job_record("eight-days")
+        assert eight is not None
+        assert eight["content_pruned"] == 1
+        assert eight["prompt"] is None
+        assert database.job_record("four-hundred-days") is None
     finally:
         database.close()
 
@@ -56,7 +50,7 @@ def test_lifecycle_retention_preserves_active_and_recent_jobs(tmp_path):
         db.upsert_project(project_id="p", root="/p")
         for name in ["old", "recent", "active"]:
             db.create_job(job_id=name, project_id="p", workflow="consult", profile="p",
-                          prompt="hello", execution_plan_json="{}", session="k")
+                          prompt="hello", plan_json="{}", session="k")
             if name != "active":
                 db.finish_job(name, "succeeded")
             with db._connection:
@@ -77,7 +71,7 @@ def test_lifecycle_retention_preserves_active_and_recent_jobs(tmp_path):
 
 @pytest.mark.asyncio
 async def test_periodic_retention_retries_and_stops_on_close(tmp_path, monkeypatch):
-    import refract.runtime as runtime_module
+    import refract.scheduling.retention as runtime_module
 
     runtime = Runtime(DaemonConfig(home=tmp_path))
     monkeypatch.setattr(runtime_module, "RETENTION_INTERVAL_S", 0.001)
@@ -95,12 +89,12 @@ async def test_periodic_retention_retries_and_stops_on_close(tmp_path, monkeypat
 
     monkeypatch.setattr(runtime, "prune_retained_transcripts", prune)
     await runtime.start()
-    task = runtime._retention_task
+    task = runtime.retention.task
     try:
         await asyncio.wait_for(retried.wait(), 2)
     finally:
         await runtime.close()
     assert task.done()
-    assert runtime._retention_task is None
+    assert runtime.retention.task is None
 
 
