@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Upgraded `coding-agent-cli` from 0.2.1 to 0.2.2. Agy now runs with `--input-format stream-json` and `--print=` as its last argument, and receives the prompt on stdin as a stream-json `user` event instead of as an argument.
+
 ## 3.0.7 - 2026-11-15
 
 - Removed the target `context_window` setting. A config that still sets it fails to load; delete the line. `result.tokens.context_window` now always comes from the backend.

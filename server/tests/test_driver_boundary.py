@@ -254,21 +254,21 @@ ARGV_CASES = [
         "agy",
         {},
         "",
-        ["agy", "--output-format", "stream-json", "--log-file", "<tmp>", "--new-project", "--dangerously-skip-permissions", "--print", "PROMPT"],
+        ["agy", "--output-format", "stream-json", "--input-format", "stream-json", "--log-file", "<tmp>", "--new-project", "--dangerously-skip-permissions", "--print="],
         id="agy-default",
     ),
     pytest.param(
         "agy",
         {**POLICY, "args": ("--user-flag",)},
         "",
-        ["agy", "--output-format", "stream-json", "--log-file", "<tmp>", "--new-project", "--model", "m1", "--dangerously-skip-permissions", "--user-flag", "--print", "PROMPT"],
+        ["agy", "--output-format", "stream-json", "--input-format", "stream-json", "--log-file", "<tmp>", "--new-project", "--model", "m1", "--dangerously-skip-permissions", "--user-flag", "--print="],
         id="agy-policy-and-user-args",
     ),
     pytest.param(
         "agy",
         {},
         "sess",
-        ["agy", "--output-format", "stream-json", "--log-file", "<tmp>", "--conversation", "sess", "--dangerously-skip-permissions", "--print", "PROMPT"],
+        ["agy", "--output-format", "stream-json", "--input-format", "stream-json", "--log-file", "<tmp>", "--conversation", "sess", "--dangerously-skip-permissions", "--print="],
         id="agy-resume",
     ),
 ]
@@ -287,8 +287,9 @@ def test_backend_argv(monkeypatch, tmp_path, backend, fields, session_id, expect
 def test_backend_prompt_channel(monkeypatch, tmp_path, backend):
     outcome = run(monkeypatch, tmp_path, backend, STREAMS[backend])
 
-    # agy takes the prompt as an argument; the others read it from stdin.
-    assert outcome.received["stdin"] == ("" if backend == "agy" else "PROMPT")
+    # agy reads a stream-json user event from stdin; the others read the bare prompt.
+    expected = '{"event": "user", "message": {"content": [{"type": "text", "text": "PROMPT"}]}}\n' if backend == "agy" else "PROMPT"
+    assert outcome.received["stdin"] == expected
     assert Path(outcome.received["cwd"]).resolve() == tmp_path.resolve()
 
 
