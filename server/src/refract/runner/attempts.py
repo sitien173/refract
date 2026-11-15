@@ -466,8 +466,7 @@ class TargetExecutor(Invocation, TargetPool):
             "failure_kind": TargetExecutor._failure_kind(result, circuit_open),
             "model": model_name or "",
             "duration_ms": duration_ms,
-            "tokens": tokens_of(attempt_tokens[-1] if attempt_tokens else None,
-                                target.context_window if target is not None else None),
+            "tokens": tokens_of(attempt_tokens[-1] if attempt_tokens else None),
         }
         if replay_safe is not None:
             outcome["replay_safe"] = replay_safe

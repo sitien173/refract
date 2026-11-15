@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Upgraded `coding-agent-cli` from 0.1.0 to 0.2.1. Codex options, including `--profile`, still come before `resume`, so resumed Codex jobs keep working with `backend_profile`. A run that stops at a CLI turn or budget limit now fails as target fatal with `error_code` `max_turns` or `budget`, where 0.1.0 reported it as retryable. A job result now holds the final assistant message rather than all assistant messages joined, and Codex attempts record no model or context usage. The structured-streaming check now runs a CLI's `--version` and `--help` and no longer reads the help text, so a Codex too old for `exec --json` fails at run time instead of falling back to final-only output. Agy output that only says the CLI is not logged in now fails as retryable `execution_error` instead of target fatal `auth`.
+- Removed the target `context_window` setting. A config that still sets it fails to load; delete the line. `result.tokens.context_window` now always comes from the backend.
+- Upgraded `coding-agent-cli` from 0.1.0 to 0.2.1. Codex options, including `--profile`, still come before `resume`, so resumed Codex jobs keep working with `backend_profile`. A run that stops at a CLI turn or budget limit now fails as target fatal with `error_code` `max_turns` or `budget`, where 0.1.0 reported it as retryable. A job result now holds the final assistant message rather than all assistant messages joined, and Codex attempts record no model or context window; `context_used` falls back to input plus output. The structured-streaming check now runs a CLI's `--version` and `--help` and no longer reads the help text, so a Codex too old for `exec --json` fails at run time instead of falling back to final-only output. Agy output that only says the CLI is not logged in now fails as retryable `execution_error` instead of target fatal `auth`.
 
 ## 3.0.6 - 2026-11-15
 

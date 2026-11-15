@@ -66,12 +66,12 @@ def test_capacity_only_global_edits_preserve_environment_session_revision(tmp_pa
     try:
         env_initial, revision_initial = runtime.catalogs.resolve_target_environment(project, "primary")
         assert env_initial == {"ENDPOINT": "synthetic-one"}
-        for context_window in (200000, 250000, None):
+        for max_concurrency in (2, 3, None):
             current = config_path.read_text(encoding="utf-8")
-            lines = [line for line in current.splitlines() if not line.startswith("context_window =")]
+            lines = [line for line in current.splitlines() if not line.startswith("max_concurrency =")]
             target_start = lines.index('id = "primary"')
-            if context_window is not None:
-                lines.insert(target_start + 1, f"context_window = {context_window}")
+            if max_concurrency is not None:
+                lines.insert(target_start + 1, f"max_concurrency = {max_concurrency}")
             config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             runtime.publish_configuration()
             env_values, revision = runtime.catalogs.resolve_target_environment(project, "primary")

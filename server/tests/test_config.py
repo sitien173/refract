@@ -64,21 +64,11 @@ def test_explicit_other_profile_mapping_loads(tmp_path) -> None:
     assert resolve_execution_plan(get_workflow("other"), catalog, "balanced").selection.targets == ("primary",)
 
 
-@pytest.mark.parametrize("value", [0, -1, 1.5, True, "200000"])
-def test_context_window_rejects_non_positive_or_non_integer_values(tmp_path, value) -> None:
-    text = _explicit_config().replace('backend = "codex"', f'backend = "codex"\ncontext_window = {json.dumps(value)}')
-    path = tmp_path / "config.toml"
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError, match="positive integer"):
-        load_config(path)
-
-
-def test_context_window_loads_positive_integer_and_omission(tmp_path) -> None:
+def test_target_context_window_is_rejected(tmp_path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(_explicit_config().replace('backend = "codex"', 'backend = "codex"\ncontext_window = 200000'), encoding="utf-8")
-    assert load_config(path).targets[0].context_window == 200000
-    path.write_text(_explicit_config(), encoding="utf-8")
-    assert load_config(path).targets[0].context_window is None
+    with pytest.raises(ValueError, match="Unsupported target settings"):
+        load_config(path)
 
 
 def test_missing_config_file_is_rejected(tmp_path) -> None:

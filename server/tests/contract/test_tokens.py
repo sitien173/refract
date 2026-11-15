@@ -8,8 +8,8 @@ from tests.contract.conftest import ContractDaemon, call_tool_json, wait_for_job
 
 
 @pytest.mark.asyncio
-async def test_codex_context_used_does_not_exceed_context_window(daemon: ContractDaemon) -> None:
-    """With the fake codex fixture, context_used is reported and does not exceed context_window."""
+async def test_codex_context_used_falls_back_to_input_plus_output(daemon: ContractDaemon) -> None:
+    """Codex reports no context window, so context_used is input plus output and the window stays null."""
     async with daemon.mcp_session() as session:
         submitted = await call_tool_json(
             session,
@@ -32,11 +32,8 @@ async def test_codex_context_used_does_not_exceed_context_window(daemon: Contrac
     assert len(rows) == 1
     row = rows[0]
     assert row["tok_input"] is not None
-    assert row["tok_input"] <= 272000
-    assert row["tok_context_used"] is not None
-    assert 0 < row["tok_context_used"] <= 272000
-    assert row["tok_context_window"] is not None
-    assert row["tok_context_used"] <= row["tok_context_window"]
+    assert row["tok_context_used"] == row["tok_input"] + row["tok_output"]
+    assert row["tok_context_window"] is None
 
     detail = await daemon.async_http_request("GET", f"/dashboard/api/jobs/{job_id}")
     assert detail.status == 200
@@ -44,7 +41,7 @@ async def test_codex_context_used_does_not_exceed_context_window(daemon: Contrac
     tokens = job_data.get("result", {}).get("tokens") or job_data.get("tokens") or {}
     context_used = tokens.get("context_used")
     assert context_used is not None, f"Missing context_used in job detail: {job_data}"
-    assert 0 < context_used <= 272000
+    assert context_used == row["tok_context_used"]
 
 
 @pytest.mark.asyncio

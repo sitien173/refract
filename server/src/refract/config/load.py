@@ -227,7 +227,6 @@ def _target(item: TargetFile) -> TargetConfig:
         system_prompt=item.system_prompt,
         args=tuple(item.args),
         max_concurrency=item.max_concurrency,
-        context_window=item.context_window,
         retry=RetryPolicy(item.retry.attempts, tuple(item.retry.codes), tuple(item.retry.patterns)),
         env=dict(item.env),
     )

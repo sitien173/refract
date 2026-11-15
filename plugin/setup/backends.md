@@ -26,7 +26,7 @@ before writing them.
 
 `id` and `backend` are required. Optional: `model`, `backend_profile`,
 `reasoning`, `system_prompt`, `args`,
-`max_concurrency`, `context_window`, `retry`, `env`. A `retry` policy without
+`max_concurrency`, `retry`, `env`. A `retry` policy without
 `codes` or `patterns` retries nothing. Credentials stay in each
 CLI's own store or in the target `env` table, never in `args`: target settings
 other than `env` are snapshotted into job records.

@@ -46,7 +46,6 @@ class TargetConfig:
     system_prompt: str = ""
     args: tuple[str, ...] = ()
     max_concurrency: int = 1
-    context_window: int | None = None
     retry: RetryPolicy = RetryPolicy()
     env: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -230,7 +229,6 @@ class TargetFile(_Model):
     system_prompt: str = ""
     args: list[str] = []
     max_concurrency: PositiveInt = 1
-    context_window: PositiveInt | None = None
     retry: RetryFile = RetryFile()
     env: dict[str, str] = {}
 

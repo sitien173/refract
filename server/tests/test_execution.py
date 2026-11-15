@@ -3240,15 +3240,6 @@ async def test_terminal_desktop_notifications_disabled_does_not_lookup_job(
         await runtime.close()
 
 
-def test_configuration_failure_metadata_retains_selected_capacity():
-    target = TargetConfig(id="bad-environment", backend="codex", context_window=2048)
-    result = TargetExecutor._configuration_failure(
-        target, "target-key", "invalid environment", [],
-    )
-    tokens = result.outcome["tokens"]
-    assert tokens["context_window"] == 2048
-
-
 @pytest.mark.asyncio
 async def test_telemetry_updated_routes_through_execution_before_stream_recording(tmp_path: Path) -> None:
     root = repository(tmp_path)
